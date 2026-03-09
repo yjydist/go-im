@@ -77,8 +77,10 @@ func main() {
 	// 注册路由
 	handler.RegisterRoutes(r, logger.L)
 
-	// 挂载 Swagger 文档
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// 挂载 Swagger 文档（仅非 release 环境）
+	if cfg.App.Env != "release" {
+		r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	}
 
 	// 启动服务（支持 Graceful Shutdown）
 	addr := fmt.Sprintf(":%d", cfg.APIServer.Port)
