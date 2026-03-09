@@ -1,3 +1,12 @@
+// @title           Go-IM API
+// @version         1.0
+// @description     高性能即时通讯系统 REST API
+// @host            localhost:8080
+// @BasePath        /api/v1
+// @securityDefinitions.apikey Bearer
+// @in header
+// @name Authorization
+// @description 输入 "Bearer {token}"（注意空格）
 package main
 
 import (
@@ -6,12 +15,16 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"github.com/yjydist/go-im/internal/config"
 	"github.com/yjydist/go-im/internal/handler"
 	"github.com/yjydist/go-im/internal/middleware"
 	"github.com/yjydist/go-im/internal/pkg/logger"
 	"github.com/yjydist/go-im/internal/pkg/snowflake"
 	"github.com/yjydist/go-im/internal/repository"
+
+	_ "github.com/yjydist/go-im/docs" // swagger docs
 )
 
 func main() {
@@ -58,6 +71,9 @@ func main() {
 
 	// 注册路由
 	handler.RegisterRoutes(r, logger.L)
+
+	// 挂载 Swagger 文档
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// 启动服务
 	addr := fmt.Sprintf(":%d", cfg.APIServer.Port)

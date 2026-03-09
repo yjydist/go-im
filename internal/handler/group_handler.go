@@ -33,10 +33,12 @@ type CreateGroupRequest struct {
 // CreateGroup 创建群组
 // @Summary 创建群组
 // @Tags 群组
+// @Security Bearer
 // @Accept json
 // @Produce json
 // @Param body body CreateGroupRequest true "群组信息"
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/group/create [post]
 func (h *GroupHandler) CreateGroup(c *gin.Context) {
 	var req CreateGroupRequest
@@ -64,10 +66,12 @@ type JoinGroupRequest struct {
 // JoinGroup 加入群组
 // @Summary 加入群组
 // @Tags 群组
+// @Security Bearer
 // @Accept json
 // @Produce json
 // @Param body body JoinGroupRequest true "群组ID"
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/group/join [post]
 func (h *GroupHandler) JoinGroup(c *gin.Context) {
 	var req JoinGroupRequest
@@ -94,8 +98,10 @@ func (h *GroupHandler) JoinGroup(c *gin.Context) {
 // ListMyGroups 获取我加入的群组列表
 // @Summary 获取我加入的群组列表
 // @Tags 群组
+// @Security Bearer
 // @Produce json
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/group/list [get]
 func (h *GroupHandler) ListMyGroups(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -112,9 +118,11 @@ func (h *GroupHandler) ListMyGroups(c *gin.Context) {
 // ListMembers 获取群成员列表
 // @Summary 获取群成员列表
 // @Tags 群组
+// @Security Bearer
 // @Produce json
 // @Param group_id query int64 true "群组ID"
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/group/members [get]
 func (h *GroupHandler) ListMembers(c *gin.Context) {
 	groupIDStr := c.Query("group_id")

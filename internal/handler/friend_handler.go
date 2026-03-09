@@ -31,10 +31,12 @@ type AddFriendRequest struct {
 // AddFriend 发送好友申请
 // @Summary 发送好友申请
 // @Tags 好友
+// @Security Bearer
 // @Accept json
 // @Produce json
 // @Param body body AddFriendRequest true "好友ID"
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/friend/add [post]
 func (h *FriendHandler) AddFriend(c *gin.Context) {
 	var req AddFriendRequest
@@ -66,10 +68,12 @@ type AcceptFriendRequest struct {
 // AcceptFriend 同意好友申请
 // @Summary 同意好友申请
 // @Tags 好友
+// @Security Bearer
 // @Accept json
 // @Produce json
 // @Param body body AcceptFriendRequest true "好友ID"
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/friend/accept [post]
 func (h *FriendHandler) AcceptFriend(c *gin.Context) {
 	var req AcceptFriendRequest
@@ -96,8 +100,10 @@ func (h *FriendHandler) AcceptFriend(c *gin.Context) {
 // ListFriends 获取好友列表
 // @Summary 获取好友列表
 // @Tags 好友
+// @Security Bearer
 // @Produce json
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/friend/list [get]
 func (h *FriendHandler) ListFriends(c *gin.Context) {
 	userID := middleware.GetUserID(c)

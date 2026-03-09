@@ -107,9 +107,11 @@ func (h *UserHandler) Login(c *gin.Context) {
 // GetUserInfo 获取用户信息
 // @Summary 获取用户信息
 // @Tags 用户
+// @Security Bearer
 // @Produce json
 // @Param user_id query int64 false "用户ID（不传则获取自己的信息）"
 // @Success 200 {object} response.Response{data=model.User}
+// @Failure 401 {object} response.Response
 // @Router /api/v1/user/info [get]
 func (h *UserHandler) GetUserInfo(c *gin.Context) {
 	userID := middleware.GetUserID(c)

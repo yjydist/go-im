@@ -28,8 +28,10 @@ func NewMessageHandler(logger *zap.Logger) *MessageHandler {
 // GetOfflineMessages 拉取离线消息
 // @Summary 拉取离线消息
 // @Tags 消息
+// @Security Bearer
 // @Produce json
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/message/offline [get]
 func (h *MessageHandler) GetOfflineMessages(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -46,12 +48,14 @@ func (h *MessageHandler) GetOfflineMessages(c *gin.Context) {
 // GetHistory 拉取历史消息
 // @Summary 游标分页拉取历史消息
 // @Tags 消息
+// @Security Bearer
 // @Produce json
 // @Param target_id query int64 true "目标ID（用户ID或群组ID）"
 // @Param chat_type query int true "聊天类型 1:单聊 2:群聊"
 // @Param cursor_msg_id query int64 false "游标消息ID"
 // @Param limit query int false "每页数量（默认20，最大100）"
 // @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
 // @Router /api/v1/message/history [get]
 func (h *MessageHandler) GetHistory(c *gin.Context) {
 	userID := middleware.GetUserID(c)
