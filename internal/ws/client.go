@@ -109,6 +109,8 @@ type Client struct {
 	groupRepo repository.GroupRepository
 	// wsRPCAddr WS 网关的内部 RPC 地址
 	wsRPCAddr string
+	// backfillSem 限制并发缓存回填 goroutine 数量
+	backfillSem chan struct{}
 }
 
 // KafkaWriter Kafka 写入接口
@@ -144,6 +146,7 @@ func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWr
 		redisRepo:   redisRepo,
 		groupRepo:   groupRepo,
 		wsRPCAddr:   wsRPCAddr,
+		backfillSem: make(chan struct{}, 5), // 最多 5 个并发回填 goroutine
 	}
 }
 
@@ -438,7 +441,18 @@ func (c *Client) checkGroupMemberFromDB(ctx context.Context, groupID, userID int
 	}
 
 	// 成员存在，异步回填 Redis 缓存（加载该群所有成员）
-	go c.backfillGroupMembersCache(groupID)
+	// 使用信号量限制并发，满了则跳过（后续请求会再触发回填）
+	select {
+	case c.backfillSem <- struct{}{}:
+		go func() {
+			defer func() { <-c.backfillSem }()
+			c.backfillGroupMembersCache(groupID)
+		}()
+	default:
+		c.logger.Debug("backfill semaphore full, skipping cache backfill",
+			zap.Int64("group_id", groupID),
+		)
+	}
 
 	return true, nil
 }
