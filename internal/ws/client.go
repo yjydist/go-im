@@ -258,6 +258,10 @@ func (c *Client) handleChat(data json.RawMessage) {
 		c.sendError(400, "content is required")
 		return
 	}
+	if len(chatData.Content) > 2000 {
+		c.sendError(400, "content too long, max 2000 characters")
+		return
+	}
 
 	ctx := context.Background()
 
