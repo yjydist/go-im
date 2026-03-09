@@ -29,6 +29,7 @@ type RedisRepository interface {
 	// 群成员缓存
 	SetGroupMembers(ctx context.Context, groupID int64, memberIDs []int64, ttl time.Duration) error
 	GetGroupMembers(ctx context.Context, groupID int64) ([]int64, error)
+	IsGroupMember(ctx context.Context, groupID, userID int64) (bool, error)
 	DelGroupMembers(ctx context.Context, groupID int64) error
 }
 
@@ -115,6 +116,20 @@ func (r *redisRepository) GetGroupMembers(ctx context.Context, groupID int64) ([
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func (r *redisRepository) IsGroupMember(ctx context.Context, groupID, userID int64) (bool, error) {
+	key := fmt.Sprintf(keyGroupMembers, groupID)
+	// 先检查 key 是否存在（缓存是否命中）
+	exists, err := r.rdb.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	if exists == 0 {
+		// 缓存未命中，无法判断，返回 true 放行
+		return true, nil
+	}
+	return r.rdb.SIsMember(ctx, key, userID).Result()
 }
 
 func (r *redisRepository) DelGroupMembers(ctx context.Context, groupID int64) error {

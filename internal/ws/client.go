@@ -223,6 +223,28 @@ func (c *Client) handleChat(data json.RawMessage) {
 
 	ctx := context.Background()
 
+	// 群聊需要验证发送者是否为群成员
+	if chatData.ChatType == 2 {
+		isMember, err := c.redisRepo.IsGroupMember(ctx, chatData.ToID, c.UserID)
+		if err != nil {
+			c.logger.Error("check group member failed",
+				zap.Int64("user_id", c.UserID),
+				zap.Int64("group_id", chatData.ToID),
+				zap.Error(err),
+			)
+			c.sendError(500, "server error")
+			return
+		}
+		if !isMember {
+			c.logger.Warn("non-member tried to send group message",
+				zap.Int64("user_id", c.UserID),
+				zap.Int64("group_id", chatData.ToID),
+			)
+			c.sendError(403, "not a group member")
+			return
+		}
+	}
+
 	// 幂等校验：SETNX msg_dedup:{msg_id}
 	isNew, err := c.redisRepo.SetMsgDedup(ctx, chatData.MsgID, 5*time.Minute)
 	if err != nil {
