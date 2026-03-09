@@ -37,8 +37,7 @@ func (h *MessageHandler) GetOfflineMessages(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	messages, err := h.msgService.GetOfflineMessages(c.Request.Context(), userID)
 	if err != nil {
-		h.logger.Error("get offline messages failed", zap.Error(err))
-		response.Error(c, errcode.ErrInternal)
+		handleServiceError(c, h.logger, "get offline messages failed", err)
 		return
 	}
 
@@ -65,8 +64,8 @@ func (h *MessageHandler) GetHistory(c *gin.Context) {
 		response.ErrorWithMsg(c, errcode.ErrBadRequest, "target_id is required")
 		return
 	}
-	targetID, err := strconv.ParseInt(targetIDStr, 10, 64)
-	if err != nil {
+	var targetID int64
+	if _, err := parseID(targetIDStr, &targetID); err != nil {
 		response.ErrorWithMsg(c, errcode.ErrBadRequest, "invalid target_id")
 		return
 	}
@@ -102,12 +101,7 @@ func (h *MessageHandler) GetHistory(c *gin.Context) {
 
 	messages, err := h.msgService.GetHistory(c.Request.Context(), userID, targetID, int8(chatType), cursorMsgID, limit)
 	if err != nil {
-		if code, ok := service.ParseBusinessError(err); ok {
-			response.Error(c, code)
-			return
-		}
-		h.logger.Error("get history failed", zap.Error(err))
-		response.Error(c, errcode.ErrInternal)
+		handleServiceError(c, h.logger, "get history failed", err)
 		return
 	}
 
