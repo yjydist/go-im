@@ -68,6 +68,44 @@ func TestCORS_OptionsPreflightReturns204(t *testing.T) {
 	}
 }
 
+func TestCORS_WhitelistOrigin_SetsCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(CORS("https://example.com", "https://app.example.com"))
+	r.GET("/test", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	// 匹配白名单的 origin
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Errorf("expected origin https://example.com, got %q", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("expected Allow-Credentials=true, got %q", got)
+	}
+	if got := w.Header().Get("Vary"); got != "Origin" {
+		t.Errorf("expected Vary=Origin, got %q", got)
+	}
+
+	// 不匹配白名单的 origin — 不应设置 CORS 头
+	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req2.Header.Set("Origin", "https://evil.com")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+
+	if got := w2.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("expected no Allow-Origin for non-whitelisted origin, got %q", got)
+	}
+	if got := w2.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("expected no Allow-Credentials for non-whitelisted origin, got %q", got)
+	}
+}
+
 // ==================== Logger 中间件测试 ====================
 
 func TestLogger_DoesNotPanic(t *testing.T) {

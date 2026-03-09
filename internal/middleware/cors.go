@@ -37,6 +37,8 @@ func CORS(allowedOrigins ...string) gin.HandlerFunc {
 			c.Header("Access-Control-Max-Age", "86400")
 			if allowOrigin != "*" {
 				c.Header("Vary", "Origin")
+				// 非通配模式下允许浏览器发送凭据（Cookie、Authorization 等）
+				c.Header("Access-Control-Allow-Credentials", "true")
 			}
 		}
 
