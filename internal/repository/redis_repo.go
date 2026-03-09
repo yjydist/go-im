@@ -29,6 +29,7 @@ type RedisRepository interface {
 	// 群成员缓存
 	SetGroupMembers(ctx context.Context, groupID int64, memberIDs []int64, ttl time.Duration) error
 	GetGroupMembers(ctx context.Context, groupID int64) ([]int64, error)
+	IsGroupMember(ctx context.Context, groupID, userID int64) (bool, error)
 	DelGroupMembers(ctx context.Context, groupID int64) error
 }
 
@@ -65,8 +66,18 @@ func (r *redisRepository) DelOnline(ctx context.Context, userID int64) error {
 
 func (r *redisRepository) SetMsgDedup(ctx context.Context, msgID string, ttl time.Duration) (bool, error) {
 	key := fmt.Sprintf(keyMsgDedup, msgID)
-	// SETNX：如果 key 不存在则设置成功返回 true，已存在返回 false
-	return r.rdb.SetNX(ctx, key, "1", ttl).Result()
+	// SET key value NX EX ttl：如果 key 不存在则设置成功返回 true，已存在返回 false
+	ok, err := r.rdb.SetArgs(ctx, key, "1", redis.SetArgs{
+		Mode: "NX",
+		TTL:  ttl,
+	}).Result()
+	if err == redis.Nil {
+		return false, nil // key 已存在
+	}
+	if err != nil {
+		return false, err
+	}
+	return ok == "OK", nil
 }
 
 func (r *redisRepository) SetGroupMembers(ctx context.Context, groupID int64, memberIDs []int64, ttl time.Duration) error {
@@ -105,6 +116,20 @@ func (r *redisRepository) GetGroupMembers(ctx context.Context, groupID int64) ([
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func (r *redisRepository) IsGroupMember(ctx context.Context, groupID, userID int64) (bool, error) {
+	key := fmt.Sprintf(keyGroupMembers, groupID)
+	// 先检查 key 是否存在（缓存是否命中）
+	exists, err := r.rdb.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	if exists == 0 {
+		// 缓存未命中，无法判断，返回 true 放行
+		return true, nil
+	}
+	return r.rdb.SIsMember(ctx, key, userID).Result()
 }
 
 func (r *redisRepository) DelGroupMembers(ctx context.Context, groupID int64) error {

@@ -30,6 +30,7 @@ logs/
 
 # Environment
 .env
+deploy/.env
 
 # Vendor (if not committed)
 # vendor/
@@ -39,3 +40,8 @@ logs/
 
 # Build output
 build/
+
+# Go binary output (from go build ./cmd/...)
+/api
+/ws
+/push

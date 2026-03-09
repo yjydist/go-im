@@ -394,10 +394,8 @@ func TestMessageService_GetHistory_DefaultLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHistory with negative limit failed: %v", err)
 	}
-	// 没有消息，只确认不报错
-	if msgs == nil {
-		// GORM Find returns nil slice when no records, this is fine
-	}
+	// 没有消息，只确认不报错；GORM Find returns nil slice when no records
+	_ = msgs
 }
 
 func TestMessageService_GetOfflineMessages(t *testing.T) {

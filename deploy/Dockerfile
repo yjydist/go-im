@@ -1,7 +1,7 @@
 # ============================================
 # 第一阶段：统一编译
 # ============================================
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git
 

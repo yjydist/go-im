@@ -17,6 +17,9 @@ type Hub struct {
 	// unregister 注销通道
 	unregister chan *Client
 
+	// stopCh 用于通知 Run 退出
+	stopCh chan struct{}
+
 	logger *zap.Logger
 }
 
@@ -26,6 +29,7 @@ func NewHub(logger *zap.Logger) *Hub {
 		clients:    make(map[int64]*Client),
 		register:   make(chan *Client, 256),
 		unregister: make(chan *Client, 256),
+		stopCh:     make(chan struct{}),
 		logger:     logger,
 	}
 }
@@ -59,6 +63,16 @@ func (h *Hub) Run() {
 			h.logger.Info("client unregistered",
 				zap.Int64("user_id", client.UserID),
 			)
+
+		case <-h.stopCh:
+			h.mu.Lock()
+			for uid, client := range h.clients {
+				client.Close()
+				delete(h.clients, uid)
+			}
+			h.mu.Unlock()
+			h.logger.Info("hub stopped, all clients disconnected")
+			return
 		}
 	}
 }
@@ -86,4 +100,9 @@ func (h *Hub) OnlineCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.clients)
+}
+
+// Stop 通知 Hub 停止运行并关闭所有客户端连接
+func (h *Hub) Stop() {
+	close(h.stopCh)
 }

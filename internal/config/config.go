@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -24,12 +25,15 @@ type AppConfig struct {
 }
 
 type APIServerConfig struct {
-	Port int `mapstructure:"port"`
+	Port           int      `mapstructure:"port"`
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
 }
 
 type WSServerConfig struct {
-	Port    int `mapstructure:"port"`
-	RPCPort int `mapstructure:"rpc_port"`
+	Port           int      `mapstructure:"port"`
+	RPCPort        int      `mapstructure:"rpc_port"`
+	InternalAPIKey string   `mapstructure:"internal_api_key"`
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
 }
 
 type MySQLConfig struct {
@@ -64,10 +68,17 @@ type LogConfig struct {
 // GlobalConfig 全局配置实例
 var GlobalConfig *Config
 
-// Load 加载配置文件
+// Load 加载配置文件，支持环境变量覆盖。
+// 环境变量前缀为 GOIM，使用下划线分隔嵌套字段，
+// 例如 GOIM_JWT_SECRET 可覆盖 jwt.secret 配置项。
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
 	viper.SetConfigType("yaml")
+
+	// 启用环境变量覆盖：GOIM_JWT_SECRET -> jwt.secret
+	viper.SetEnvPrefix("GOIM")
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config file failed: %w", err)

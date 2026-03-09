@@ -10,9 +10,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -66,19 +71,43 @@ func main() {
 	// 创建 Gin Engine
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(middleware.CORS())
+	r.Use(middleware.CORS(cfg.APIServer.AllowedOrigins...))
 	r.Use(middleware.Logger(logger.L))
 
 	// 注册路由
 	handler.RegisterRoutes(r, logger.L)
 
-	// 挂载 Swagger 文档
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-
-	// 启动服务
-	addr := fmt.Sprintf(":%d", cfg.APIServer.Port)
-	logger.L.Sugar().Infof("API server starting on %s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("start api server failed: %v", err)
+	// 挂载 Swagger 文档（仅非 release 环境）
+	if cfg.App.Env != "release" {
+		r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	}
+
+	// 启动服务（支持 Graceful Shutdown）
+	addr := fmt.Sprintf(":%d", cfg.APIServer.Port)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
+	}
+
+	// 监听系统信号
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		logger.L.Sugar().Infof("API server starting on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("start api server failed: %v", err)
+		}
+	}()
+
+	// 阻塞等待信号
+	<-ctx.Done()
+	logger.L.Info("API server shutting down...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.L.Sugar().Errorf("API server forced shutdown: %v", err)
+	}
+	logger.L.Info("API server stopped")
 }

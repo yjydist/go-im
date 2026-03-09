@@ -14,23 +14,38 @@ import (
 	"go.uber.org/zap"
 )
 
-// upgrader WebSocket 升级配置
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许所有来源（生产环境应限制）
-	},
+// NewUpgrader 创建 WebSocket Upgrader，根据配置设置 Origin 检查策略。
+// 当 allowedOrigins 为空时，允许所有来源（开发模式）；
+// 否则只允许白名单中的来源。
+func NewUpgrader(allowedOrigins []string) websocket.Upgrader {
+	return websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			if len(allowedOrigins) == 0 {
+				return true // 开发模式：未配置白名单时允许所有来源
+			}
+			origin := r.Header.Get("Origin")
+			for _, allowed := range allowedOrigins {
+				if allowed == "*" || allowed == origin {
+					return true
+				}
+			}
+			return false
+		},
+	}
 }
 
 // Server WebSocket 网关服务
 type Server struct {
-	hub         *Hub
-	kafkaWriter *kafkaWriterAdapter
-	redisRepo   repository.RedisRepository
-	wsRPCAddr   string
-	jwtSecret   string
-	logger      *zap.Logger
+	hub            *Hub
+	kafkaWriter    *kafkaWriterAdapter
+	redisRepo      repository.RedisRepository
+	upgrader       websocket.Upgrader
+	wsRPCAddr      string
+	jwtSecret      string
+	internalAPIKey string
+	logger         *zap.Logger
 }
 
 // kafkaWriterAdapter 适配 kafka-go Writer 到 KafkaWriter 接口
@@ -61,12 +76,14 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 	wsRPCAddr := fmt.Sprintf("localhost:%d", cfg.WSServer.RPCPort)
 
 	return &Server{
-		hub:         hub,
-		kafkaWriter: &kafkaWriterAdapter{writer: writer},
-		redisRepo:   redisRepo,
-		wsRPCAddr:   wsRPCAddr,
-		jwtSecret:   cfg.JWT.Secret,
-		logger:      logger,
+		hub:            hub,
+		kafkaWriter:    &kafkaWriterAdapter{writer: writer},
+		redisRepo:      redisRepo,
+		upgrader:       NewUpgrader(cfg.WSServer.AllowedOrigins),
+		wsRPCAddr:      wsRPCAddr,
+		jwtSecret:      cfg.JWT.Secret,
+		internalAPIKey: cfg.WSServer.InternalAPIKey,
+		logger:         logger,
 	}
 }
 
@@ -93,7 +110,7 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 升级为 WebSocket 连接
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logger.Error("ws upgrade failed",
 			zap.Int64("user_id", claims.UserID),
@@ -116,11 +133,21 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 // HandleInternalPush 处理内部推送请求
 // Push 服务通过此接口将消息推送给在线用户
 // POST /internal/push
+// Header: X-API-Key: <internal_api_key>
 // Body: {"user_id": 123, "data": {...}}
 func (s *Server) HandleInternalPush(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// 验证内部 API Key
+	if s.internalAPIKey != "" {
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey != s.internalAPIKey {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	var msg PushMsg
@@ -160,7 +187,7 @@ func (s *Server) HandleInternalPush(w http.ResponseWriter, r *http.Request) {
 	)
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	_, _ = w.Write([]byte(`{"code":0,"msg":"ok"}`))
 }
 
 // Close 关闭 Kafka Writer

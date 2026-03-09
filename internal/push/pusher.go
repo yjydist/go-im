@@ -24,11 +24,12 @@ const (
 
 // Pusher 消息路由与推送
 type Pusher struct {
-	messageRepo repository.MessageRepository
-	groupRepo   repository.GroupRepository
-	redisRepo   repository.RedisRepository
-	httpClient  *http.Client
-	logger      *zap.Logger
+	messageRepo    repository.MessageRepository
+	groupRepo      repository.GroupRepository
+	redisRepo      repository.RedisRepository
+	httpClient     *http.Client
+	internalAPIKey string
+	logger         *zap.Logger
 }
 
 // NewPusher 创建 Pusher
@@ -36,12 +37,14 @@ func NewPusher(
 	messageRepo repository.MessageRepository,
 	groupRepo repository.GroupRepository,
 	redisRepo repository.RedisRepository,
+	internalAPIKey string,
 	logger *zap.Logger,
 ) *Pusher {
 	return &Pusher{
-		messageRepo: messageRepo,
-		groupRepo:   groupRepo,
-		redisRepo:   redisRepo,
+		messageRepo:    messageRepo,
+		groupRepo:      groupRepo,
+		redisRepo:      redisRepo,
+		internalAPIKey: internalAPIKey,
 		httpClient: &http.Client{
 			Timeout: pushTimeout,
 		},
@@ -182,6 +185,9 @@ func (p *Pusher) sendPush(ctx context.Context, wsAddr string, userID int64, msg 
 		return fmt.Errorf("create push request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if p.internalAPIKey != "" {
+		req.Header.Set("X-API-Key", p.internalAPIKey)
+	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {

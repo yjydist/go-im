@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/yjydist/go-im/internal/config"
@@ -45,13 +47,20 @@ func InitMySQL(cfg *config.MySQLConfig, zapLogger *zap.Logger) error {
 	return nil
 }
 
-// InitRedis 初始化 Redis 连接
+// InitRedis 初始化 Redis 连接并验证连通性
 func InitRedis(cfg *config.RedisConfig, zapLogger *zap.Logger) error {
 	RDB = redis.NewClient(&redis.Options{
 		Addr:     cfg.Addr,
 		Password: cfg.Password,
 		DB:       cfg.DB,
 	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := RDB.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis ping failed: %w", err)
+	}
 
 	zapLogger.Info("redis connected")
 	return nil

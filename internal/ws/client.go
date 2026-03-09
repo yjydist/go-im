@@ -93,7 +93,7 @@ func (c *Client) Start() {
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
-		c.conn.Close()
+		_ = c.conn.Close()
 	})
 }
 
@@ -126,10 +126,9 @@ func (c *Client) readPump() {
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
@@ -161,9 +160,9 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
@@ -175,7 +174,7 @@ func (c *Client) writePump() {
 			}
 
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -223,6 +222,28 @@ func (c *Client) handleChat(data json.RawMessage) {
 	}
 
 	ctx := context.Background()
+
+	// 群聊需要验证发送者是否为群成员
+	if chatData.ChatType == 2 {
+		isMember, err := c.redisRepo.IsGroupMember(ctx, chatData.ToID, c.UserID)
+		if err != nil {
+			c.logger.Error("check group member failed",
+				zap.Int64("user_id", c.UserID),
+				zap.Int64("group_id", chatData.ToID),
+				zap.Error(err),
+			)
+			c.sendError(500, "server error")
+			return
+		}
+		if !isMember {
+			c.logger.Warn("non-member tried to send group message",
+				zap.Int64("user_id", c.UserID),
+				zap.Int64("group_id", chatData.ToID),
+			)
+			c.sendError(403, "not a group member")
+			return
+		}
+	}
 
 	// 幂等校验：SETNX msg_dedup:{msg_id}
 	isNew, err := c.redisRepo.SetMsgDedup(ctx, chatData.MsgID, 5*time.Minute)
@@ -289,7 +310,11 @@ func (c *Client) sendAck(msgID string) {
 		Type: "ack",
 		Data: AckData{MsgID: msgID},
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		c.logger.Error("marshal ack msg failed", zap.Error(err))
+		return
+	}
 	c.Send(data)
 }
 
@@ -299,7 +324,11 @@ func (c *Client) sendPong() {
 		Type: "pong",
 		Data: nil,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		c.logger.Error("marshal pong msg failed", zap.Error(err))
+		return
+	}
 	c.Send(data)
 }
 
@@ -309,6 +338,10 @@ func (c *Client) sendError(code int, errMsg string) {
 		Type: "error",
 		Data: ErrorData{Code: code, Msg: errMsg},
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		c.logger.Error("marshal error msg failed", zap.Error(err))
+		return
+	}
 	c.Send(data)
 }
