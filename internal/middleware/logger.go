@@ -19,7 +19,7 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 		latency := time.Since(start)
 		status := c.Writer.Status()
 
-		logger.Info("http request",
+		fields := []zap.Field{
 			zap.Int("status", status),
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
@@ -27,6 +27,17 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 			zap.String("ip", c.ClientIP()),
 			zap.Duration("latency", latency),
 			zap.Int("body_size", c.Writer.Size()),
-		)
+		}
+
+		switch {
+		case status >= 500:
+			logger.Error("http request", fields...)
+		case status >= 400:
+			logger.Warn("http request", fields...)
+		case status >= 300:
+			logger.Info("http request", fields...)
+		default:
+			logger.Debug("http request", fields...)
+		}
 	}
 }

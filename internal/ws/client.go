@@ -15,21 +15,68 @@ import (
 )
 
 const (
-	// 写入超时时间
-	writeWait = 10 * time.Second
-	// 读取 Pong 超时时间
-	pongWait = 60 * time.Second
-	// Ping 间隔（必须小于 pongWait）
-	pingPeriod = 54 * time.Second
-	// 最大消息大小
-	maxMessageSize = 4096
-	// 发送通道缓冲大小
-	sendChanSize = 256
-	// 在线状态 TTL
-	onlineTTL = 120 * time.Second
-	// 心跳刷新在线状态间隔
-	heartbeatInterval = 60 * time.Second
+	// 默认值（当配置为零值时使用）
+	defaultWriteWait         = 10 * time.Second
+	defaultPongWait          = 60 * time.Second
+	defaultPingPeriod        = 54 * time.Second
+	defaultMaxMessageSize    = 4096
+	defaultSendChanSize      = 256
+	defaultOnlineTTL         = 120 * time.Second
+	defaultHeartbeatInterval = 60 * time.Second
 )
+
+// ClientConfig WS 客户端可配置参数
+type ClientConfig struct {
+	WriteWait         time.Duration
+	PongWait          time.Duration
+	PingPeriod        time.Duration
+	MaxMessageSize    int64
+	SendChanSize      int
+	OnlineTTL         time.Duration
+	HeartbeatInterval time.Duration
+}
+
+func (c ClientConfig) writeWait() time.Duration {
+	if c.WriteWait > 0 {
+		return c.WriteWait
+	}
+	return defaultWriteWait
+}
+
+func (c ClientConfig) pongWait() time.Duration {
+	if c.PongWait > 0 {
+		return c.PongWait
+	}
+	return defaultPongWait
+}
+
+func (c ClientConfig) pingPeriod() time.Duration {
+	if c.PingPeriod > 0 {
+		return c.PingPeriod
+	}
+	return defaultPingPeriod
+}
+
+func (c ClientConfig) maxMessageSize() int64 {
+	if c.MaxMessageSize > 0 {
+		return c.MaxMessageSize
+	}
+	return defaultMaxMessageSize
+}
+
+func (c ClientConfig) onlineTTL() time.Duration {
+	if c.OnlineTTL > 0 {
+		return c.OnlineTTL
+	}
+	return defaultOnlineTTL
+}
+
+func (c ClientConfig) heartbeatInterval() time.Duration {
+	if c.HeartbeatInterval > 0 {
+		return c.HeartbeatInterval
+	}
+	return defaultHeartbeatInterval
+}
 
 // kafkaSendMsg 异步 Kafka 写入任务
 type kafkaSendMsg struct {
@@ -45,7 +92,10 @@ type Client struct {
 	send   chan []byte
 	hub    *Hub
 	logger *zap.Logger
+	cfg    ClientConfig
 
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closeCh   chan struct{}
 	closeOnce sync.Once
 
@@ -59,6 +109,8 @@ type Client struct {
 	groupRepo repository.GroupRepository
 	// wsRPCAddr WS 网关的内部 RPC 地址
 	wsRPCAddr string
+	// backfillSem 限制并发缓存回填 goroutine 数量
+	backfillSem chan struct{}
 }
 
 // KafkaWriter Kafka 写入接口
@@ -73,19 +125,28 @@ type KafkaMessage struct {
 }
 
 // NewClient 创建客户端连接
-func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWriter, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, wsRPCAddr string, logger *zap.Logger) *Client {
+func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWriter, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, wsRPCAddr string, cfg ClientConfig, logger *zap.Logger) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
+	chanSize := cfg.SendChanSize
+	if chanSize <= 0 {
+		chanSize = defaultSendChanSize
+	}
 	return &Client{
 		UserID:      userID,
 		conn:        conn,
-		send:        make(chan []byte, sendChanSize),
+		send:        make(chan []byte, chanSize),
 		hub:         hub,
 		logger:      logger,
+		cfg:         cfg,
+		ctx:         ctx,
+		cancel:      cancel,
 		closeCh:     make(chan struct{}),
 		kafkaWriter: kafkaWriter,
-		kafkaCh:     make(chan kafkaSendMsg, sendChanSize),
+		kafkaCh:     make(chan kafkaSendMsg, chanSize),
 		redisRepo:   redisRepo,
 		groupRepo:   groupRepo,
 		wsRPCAddr:   wsRPCAddr,
+		backfillSem: make(chan struct{}, 5), // 最多 5 个并发回填 goroutine
 	}
 }
 
@@ -96,8 +157,7 @@ func (c *Client) Start() {
 	go c.kafkaWorker()
 
 	// 注册在线状态
-	ctx := context.Background()
-	if err := c.redisRepo.SetOnline(ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
+	if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, c.cfg.onlineTTL()); err != nil {
 		c.logger.Error("set online status failed",
 			zap.Int64("user_id", c.UserID),
 			zap.Error(err),
@@ -108,6 +168,7 @@ func (c *Client) Start() {
 // Close 关闭连接
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
+		c.cancel()
 		close(c.closeCh)
 		_ = c.conn.Close()
 	})
@@ -132,8 +193,10 @@ func (c *Client) readPump() {
 		c.hub.Unregister(c)
 		c.Close()
 		// 清除在线状态（仅当值匹配本连接地址时才删除）
-		ctx := context.Background()
-		if err := c.redisRepo.DelOnline(ctx, c.UserID, c.wsRPCAddr); err != nil {
+		// 使用独立短期 context，因为 c.ctx 可能已取消
+		delCtx, delCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer delCancel()
+		if err := c.redisRepo.DelOnline(delCtx, c.UserID, c.wsRPCAddr); err != nil {
 			c.logger.Error("delete online status failed",
 				zap.Int64("user_id", c.UserID),
 				zap.Error(err),
@@ -141,10 +204,10 @@ func (c *Client) readPump() {
 		}
 	}()
 
-	c.conn.SetReadLimit(maxMessageSize)
-	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetReadLimit(c.cfg.maxMessageSize())
+	_ = c.conn.SetReadDeadline(time.Now().Add(c.cfg.pongWait()))
 	c.conn.SetPongHandler(func(string) error {
-		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return c.conn.SetReadDeadline(time.Now().Add(c.cfg.pongWait()))
 	})
 
 	for {
@@ -165,8 +228,8 @@ func (c *Client) readPump() {
 
 // writePump 从发送通道读取消息发给客户端
 func (c *Client) writePump() {
-	ticker := time.NewTicker(pingPeriod)
-	heartbeat := time.NewTicker(heartbeatInterval)
+	ticker := time.NewTicker(c.cfg.pingPeriod())
+	heartbeat := time.NewTicker(c.cfg.heartbeatInterval())
 	defer func() {
 		ticker.Stop()
 		heartbeat.Stop()
@@ -176,7 +239,7 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.cfg.writeWait()))
 			if !ok {
 				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
@@ -190,15 +253,14 @@ func (c *Client) writePump() {
 			}
 
 		case <-ticker.C:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.cfg.writeWait()))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 
 		case <-heartbeat.C:
 			// 定期刷新在线状态
-			ctx := context.Background()
-			if err := c.redisRepo.SetOnline(ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
+			if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, c.cfg.onlineTTL()); err != nil {
 				c.logger.Error("refresh online status failed",
 					zap.Int64("user_id", c.UserID),
 					zap.Error(err),
@@ -263,7 +325,7 @@ func (c *Client) handleChat(data json.RawMessage) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := c.ctx
 
 	// 群聊需要验证发送者是否为群成员
 	if chatData.ChatType == 2 {
@@ -379,7 +441,18 @@ func (c *Client) checkGroupMemberFromDB(ctx context.Context, groupID, userID int
 	}
 
 	// 成员存在，异步回填 Redis 缓存（加载该群所有成员）
-	go c.backfillGroupMembersCache(groupID)
+	// 使用信号量限制并发，满了则跳过（后续请求会再触发回填）
+	select {
+	case c.backfillSem <- struct{}{}:
+		go func() {
+			defer func() { <-c.backfillSem }()
+			c.backfillGroupMembersCache(groupID)
+		}()
+	default:
+		c.logger.Debug("backfill semaphore full, skipping cache backfill",
+			zap.Int64("group_id", groupID),
+		)
+	}
 
 	return true, nil
 }
@@ -389,8 +462,7 @@ func (c *Client) backfillGroupMembersCache(groupID int64) {
 	if c.groupRepo == nil {
 		return
 	}
-	ctx := context.Background()
-	memberIDs, err := c.groupRepo.ListMemberIDs(ctx, groupID)
+	memberIDs, err := c.groupRepo.ListMemberIDs(c.ctx, groupID)
 	if err != nil {
 		c.logger.Error("backfill group members cache: list member IDs failed",
 			zap.Int64("group_id", groupID),
@@ -401,7 +473,7 @@ func (c *Client) backfillGroupMembersCache(groupID int64) {
 	if len(memberIDs) == 0 {
 		return
 	}
-	if err := c.redisRepo.SetGroupMembers(ctx, groupID, memberIDs, 30*time.Minute); err != nil {
+	if err := c.redisRepo.SetGroupMembers(c.ctx, groupID, memberIDs, 30*time.Minute); err != nil {
 		c.logger.Error("backfill group members cache: set redis failed",
 			zap.Int64("group_id", groupID),
 			zap.Error(err),
@@ -419,7 +491,7 @@ func (c *Client) kafkaWorker() {
 			if !ok {
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 			err := c.kafkaWriter.WriteMessages(ctx, KafkaMessage{
 				Key:   []byte(strconv.FormatInt(c.UserID, 10)),
 				Value: task.msgBytes,

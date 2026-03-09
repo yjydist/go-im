@@ -17,13 +17,39 @@ import (
 )
 
 const (
-	// 内部 HTTP 推送超时
-	pushTimeout = 3 * time.Second
-	// 群成员缓存 TTL
-	groupMemberCacheTTL = 1 * time.Hour
-	// 群推送最大并发度
-	groupPushConcurrency = 20
+	// 默认值
+	defaultPushTimeout          = 3 * time.Second
+	defaultGroupMemberCacheTTL  = 1 * time.Hour
+	defaultGroupPushConcurrency = 20
 )
+
+// PusherConfig 推送服务可配置参数
+type PusherConfig struct {
+	PushTimeout          time.Duration
+	GroupMemberCacheTTL  time.Duration
+	GroupPushConcurrency int
+}
+
+func (c PusherConfig) pushTimeout() time.Duration {
+	if c.PushTimeout > 0 {
+		return c.PushTimeout
+	}
+	return defaultPushTimeout
+}
+
+func (c PusherConfig) groupMemberCacheTTL() time.Duration {
+	if c.GroupMemberCacheTTL > 0 {
+		return c.GroupMemberCacheTTL
+	}
+	return defaultGroupMemberCacheTTL
+}
+
+func (c PusherConfig) groupPushConcurrency() int {
+	if c.GroupPushConcurrency > 0 {
+		return c.GroupPushConcurrency
+	}
+	return defaultGroupPushConcurrency
+}
 
 // Pusher 消息路由与推送
 type Pusher struct {
@@ -32,6 +58,7 @@ type Pusher struct {
 	redisRepo      repository.RedisRepository
 	httpClient     *http.Client
 	internalAPIKey string
+	cfg            PusherConfig
 	logger         *zap.Logger
 }
 
@@ -41,6 +68,7 @@ func NewPusher(
 	groupRepo repository.GroupRepository,
 	redisRepo repository.RedisRepository,
 	internalAPIKey string,
+	cfg PusherConfig,
 	logger *zap.Logger,
 ) *Pusher {
 	return &Pusher{
@@ -48,8 +76,14 @@ func NewPusher(
 		groupRepo:      groupRepo,
 		redisRepo:      redisRepo,
 		internalAPIKey: internalAPIKey,
+		cfg:            cfg,
 		httpClient: &http.Client{
-			Timeout: pushTimeout,
+			Timeout: cfg.pushTimeout(),
+			Transport: &http.Transport{
+				MaxIdleConns:        100,              // 全局最大空闲连接数
+				MaxIdleConnsPerHost: 20,               // 每个 host 最大空闲连接（Push 主要连接少量 WS 节点）
+				IdleConnTimeout:     90 * time.Second, // 空闲连接超时回收
+			},
 		},
 		logger: logger,
 	}
@@ -141,7 +175,7 @@ func (p *Pusher) pushToGroup(ctx context.Context, groupID, fromID int64, msg *mo
 
 		// 回填 Redis 缓存
 		if len(memberIDs) > 0 {
-			if err := p.redisRepo.SetGroupMembers(ctx, groupID, memberIDs, groupMemberCacheTTL); err != nil {
+			if err := p.redisRepo.SetGroupMembers(ctx, groupID, memberIDs, p.cfg.groupMemberCacheTTL()); err != nil {
 				p.logger.Warn("set group members cache failed",
 					zap.Int64("group_id", groupID),
 					zap.Error(err),
@@ -151,7 +185,7 @@ func (p *Pusher) pushToGroup(ctx context.Context, groupID, fromID int64, msg *mo
 	}
 
 	// 并发推送给群成员（排除发送者），限制并发度
-	sem := make(chan struct{}, groupPushConcurrency)
+	sem := make(chan struct{}, p.cfg.groupPushConcurrency())
 	var wg sync.WaitGroup
 	for _, memberID := range memberIDs {
 		if memberID == fromID {

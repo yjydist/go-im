@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/segmentio/kafka-go"
@@ -46,6 +47,7 @@ type Server struct {
 	wsRPCAddr      string
 	jwtSecret      string
 	internalAPIKey string
+	clientCfg      ClientConfig
 	logger         *zap.Logger
 }
 
@@ -67,17 +69,39 @@ func (a *kafkaWriterAdapter) WriteMessages(ctx context.Context, msgs ...KafkaMes
 
 // NewServer 创建 WS 网关服务
 func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, logger *zap.Logger) *Server {
-	// 创建 Kafka Writer
-	writer := kafka.NewWriter(kafka.WriterConfig{
-		Brokers:  cfg.Kafka.Brokers,
+	// 创建 Kafka Writer（使用直接 struct 初始化，避免已废弃的 WriterConfig）
+	writer := &kafka.Writer{
+		Addr:     kafka.TCP(cfg.Kafka.Brokers...),
 		Topic:    cfg.Kafka.TopicChat,
 		Balancer: &kafka.LeastBytes{},
-	})
+	}
+	// 应用 Kafka Producer 配置（零值保持 kafka-go 默认行为）
+	if cfg.Kafka.BatchSize > 0 {
+		writer.BatchSize = cfg.Kafka.BatchSize
+	}
+	if cfg.Kafka.BatchTimeoutMs > 0 {
+		writer.BatchTimeout = time.Duration(cfg.Kafka.BatchTimeoutMs) * time.Millisecond
+	}
+	if cfg.Kafka.RequiredAcks != 0 {
+		writer.RequiredAcks = kafka.RequiredAcks(cfg.Kafka.RequiredAcks)
+	}
 
 	// 优先使用通告地址（Docker 等跨容器场景），为空时回退到 localhost
 	wsRPCAddr := cfg.WSServer.RPCAdvertiseAddr
 	if wsRPCAddr == "" {
 		wsRPCAddr = fmt.Sprintf("localhost:%d", cfg.WSServer.RPCPort)
+	}
+
+	// 构建 ClientConfig（零值使用默认值，由 ClientConfig getter 方法处理）
+	wsCfg := cfg.WSServer
+	clientCfg := ClientConfig{
+		WriteWait:         time.Duration(wsCfg.WriteWaitMs) * time.Millisecond,
+		PongWait:          time.Duration(wsCfg.PongWaitMs) * time.Millisecond,
+		PingPeriod:        time.Duration(wsCfg.PingPeriodMs) * time.Millisecond,
+		MaxMessageSize:    int64(wsCfg.MaxMessageSize),
+		SendChanSize:      wsCfg.SendChanSize,
+		OnlineTTL:         time.Duration(wsCfg.OnlineTTLSec) * time.Second,
+		HeartbeatInterval: time.Duration(wsCfg.HeartbeatInterSec) * time.Second,
 	}
 
 	return &Server{
@@ -89,6 +113,7 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 		wsRPCAddr:      wsRPCAddr,
 		jwtSecret:      cfg.JWT.Secret,
 		internalAPIKey: cfg.WSServer.InternalAPIKey,
+		clientCfg:      clientCfg,
 		logger:         logger,
 	}
 }
@@ -131,7 +156,7 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// 创建 Client 并启动
-	client := NewClient(claims.UserID, conn, s.hub, s.kafkaWriter, s.redisRepo, s.groupRepo, s.wsRPCAddr, s.logger)
+	client := NewClient(claims.UserID, conn, s.hub, s.kafkaWriter, s.redisRepo, s.groupRepo, s.wsRPCAddr, s.clientCfg, s.logger)
 	s.hub.Register(client)
 	client.Start()
 }

@@ -425,6 +425,50 @@ func TestMessageService_GetOfflineMessages(t *testing.T) {
 	}
 }
 
+func TestMessageService_GetHistory_GroupMemberCheck(t *testing.T) {
+	setupTestEnv(t)
+	groupSvc := NewGroupService(testLogger())
+	msgSvc := NewMessageService(testLogger())
+	msgRepo := repository.NewMessageRepository()
+	ctx := context.Background()
+
+	// 创建群组（owner=1）
+	group, err := groupSvc.CreateGroup(ctx, "HistoryGroup", 1)
+	if err != nil {
+		t.Fatalf("CreateGroup failed: %v", err)
+	}
+
+	// 用户 2 加入群
+	if err := groupSvc.JoinGroup(ctx, group.ID, 2); err != nil {
+		t.Fatalf("JoinGroup failed: %v", err)
+	}
+
+	// 插入一条群聊消息
+	_ = msgRepo.Create(ctx, &model.Message{
+		ID: 10001, MsgID: "grp-hist-1",
+		FromID: 1, ToID: group.ID, ChatType: 2, ContentType: 1, Content: "group msg",
+	})
+
+	// 群成员（user 2）应能查询群历史
+	msgs, err := msgSvc.GetHistory(ctx, 2, group.ID, 2, 0, 10)
+	if err != nil {
+		t.Fatalf("GetHistory for group member failed: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("expected 1 group message, got %d", len(msgs))
+	}
+
+	// 非群成员（user 999）应被拒绝
+	_, err = msgSvc.GetHistory(ctx, 999, group.ID, 2, 0, 10)
+	if err == nil {
+		t.Fatal("expected error for non-group-member, got nil")
+	}
+	code, isBiz := ParseBusinessError(err)
+	if !isBiz || code != 40003 {
+		t.Errorf("expected ErrGroupNotMember (40003), got code=%d isBiz=%v err=%v", code, isBiz, err)
+	}
+}
+
 // --- ParseBusinessError 测试 ---
 
 func TestParseBusinessError_NilError(t *testing.T) {

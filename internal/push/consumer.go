@@ -20,15 +20,26 @@ type Consumer struct {
 }
 
 // NewConsumer 创建 Kafka 消费者（Reader 延迟到 Start 中创建，确保 broker 就绪）
-func NewConsumer(brokers []string, topic, groupID string, pusher *Pusher, logger *zap.Logger) *Consumer {
+func NewConsumer(brokers []string, topic, groupID string, maxWait time.Duration, maxBytes int64, startOffset int64, pusher *Pusher, logger *zap.Logger) *Consumer {
+	if maxWait <= 0 {
+		maxWait = 3 * time.Second
+	}
+	if maxBytes <= 0 {
+		maxBytes = 10e6 // 10MB
+	}
+	// startOffset: -1 = newest (kafka.LastOffset), -2 = oldest (kafka.FirstOffset)
+	if startOffset != kafka.FirstOffset && startOffset != kafka.LastOffset {
+		startOffset = kafka.LastOffset
+	}
+
 	cfg := kafka.ReaderConfig{
 		Brokers:     brokers,
 		Topic:       topic,
 		GroupID:     groupID,
 		MinBytes:    1,
-		MaxBytes:    10e6, // 10MB
-		MaxWait:     3 * time.Second,
-		StartOffset: kafka.LastOffset,
+		MaxBytes:    int(maxBytes),
+		MaxWait:     maxWait,
+		StartOffset: startOffset,
 		Logger:      kafka.LoggerFunc(newKafkaLogFunc(logger, zap.DebugLevel)),
 		ErrorLogger: kafka.LoggerFunc(newKafkaLogFunc(logger, zap.ErrorLevel)),
 	}
