@@ -7,7 +7,7 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
     volumes:
       - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
@@ -61,6 +61,9 @@ services:
       target: api
     ports:
       - "8080:8080"
+    environment:
+      GOIM_JWT_SECRET: ${JWT_SECRET}
+      GOIM_MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/go_im?charset=utf8mb4&parseTime=True&loc=Local"
     depends_on:
       mysql:
         condition: service_healthy
@@ -76,7 +79,10 @@ services:
       target: ws
     ports:
       - "8081:8081"
-      - "9091:9091"
+    expose:
+      - "9091"
+    environment:
+      GOIM_JWT_SECRET: ${JWT_SECRET}
     depends_on:
       redis:
         condition: service_healthy
@@ -90,6 +96,8 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       target: push
+    environment:
+      GOIM_MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/go_im?charset=utf8mb4&parseTime=True&loc=Local"
     depends_on:
       mysql:
         condition: service_healthy

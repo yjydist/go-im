@@ -30,6 +30,7 @@ logs/
 
 # Environment
 .env
+deploy/.env
 
 # Vendor (if not committed)
 # vendor/
