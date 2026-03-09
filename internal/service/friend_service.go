@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/yjydist/go-im/internal/model"
 	"github.com/yjydist/go-im/internal/pkg/errcode"
@@ -49,9 +50,12 @@ func (s *friendService) AddFriend(ctx context.Context, userID, friendID int64) e
 		return fmt.Errorf("query friend user failed: %w", err)
 	}
 
-	// 检查是否已存在好友关系
-	_, err = s.friendRepo.GetByUserAndFriend(ctx, userID, friendID)
+	// 快速路径：检查是否已存在好友关系
+	existing, err := s.friendRepo.GetByUserAndFriend(ctx, userID, friendID)
 	if err == nil {
+		if existing.Status == 0 {
+			return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendPending)
+		}
 		return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendExist)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -64,6 +68,10 @@ func (s *friendService) AddFriend(ctx context.Context, userID, friendID int64) e
 		Status:   0, // 待确认
 	}
 	if err := s.friendRepo.Create(ctx, friendship); err != nil {
+		// 兜底处理唯一键冲突（并发 TOCTOU 场景）
+		if isDuplicateKeyError(err) {
+			return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendExist)
+		}
 		return err
 	}
 
@@ -74,9 +82,20 @@ func (s *friendService) AddFriend(ctx context.Context, userID, friendID int64) e
 	return nil
 }
 
+// isDuplicateKeyError 判断是否为数据库唯一键冲突错误
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// MySQL: "Duplicate entry"
+	// SQLite: "UNIQUE constraint failed"
+	return strings.Contains(msg, "Duplicate entry") || strings.Contains(msg, "UNIQUE constraint")
+}
+
 func (s *friendService) AcceptFriend(ctx context.Context, userID, friendID int64) error {
 	// 查找对方发来的好友申请
-	_, err := s.friendRepo.GetByUserAndFriend(ctx, friendID, userID)
+	friendship, err := s.friendRepo.GetByUserAndFriend(ctx, friendID, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendNotFound)
@@ -84,20 +103,17 @@ func (s *friendService) AcceptFriend(ctx context.Context, userID, friendID int64
 		return fmt.Errorf("query friendship failed: %w", err)
 	}
 
-	// 更新状态为已接受
-	if err := s.friendRepo.Accept(ctx, friendID, userID); err != nil {
-		return err
+	// 检查状态是否为待确认
+	if friendship.Status != 0 {
+		return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendExist)
 	}
 
-	// 同时创建反向好友关系（双向）
-	reverseFriendship := &model.Friendship{
-		UserID:   userID,
-		FriendID: friendID,
-		Status:   1, // 已接受
-	}
-	if err := s.friendRepo.Create(ctx, reverseFriendship); err != nil {
-		// 如果反向关系已存在，忽略
-		s.logger.Warn("create reverse friendship failed", zap.Error(err))
+	// 在事务中：接受好友请求 + 创建反向关系
+	if err := s.friendRepo.AcceptAndCreateReverse(ctx, friendID, userID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendNotFound)
+		}
+		return err
 	}
 
 	s.logger.Info("friend request accepted",

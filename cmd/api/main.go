@@ -42,6 +42,11 @@ func main() {
 		log.Fatalf("load config failed: %v", err)
 	}
 
+	// 校验配置安全性
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config validation failed: %v", err)
+	}
+
 	// 初始化日志
 	if err := logger.Init(cfg.Log.Level, cfg.Log.Filename); err != nil {
 		log.Fatalf("init logger failed: %v", err)
@@ -85,8 +90,11 @@ func main() {
 	// 启动服务（支持 Graceful Shutdown）
 	addr := fmt.Sprintf(":%d", cfg.APIServer.Port)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
+		Addr:         addr,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	// 监听系统信号

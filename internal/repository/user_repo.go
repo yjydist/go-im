@@ -54,6 +54,7 @@ func (r *userRepository) GetByID(ctx context.Context, id int64) (*model.User, er
 type FriendRepository interface {
 	Create(ctx context.Context, friendship *model.Friendship) error
 	Accept(ctx context.Context, userID, friendID int64) error
+	AcceptAndCreateReverse(ctx context.Context, userID, friendID int64) error
 	GetByUserAndFriend(ctx context.Context, userID, friendID int64) (*model.Friendship, error)
 	ListFriends(ctx context.Context, userID int64) ([]model.User, error)
 }
@@ -75,15 +76,50 @@ func (r *friendRepository) Create(ctx context.Context, friendship *model.Friends
 }
 
 func (r *friendRepository) Accept(ctx context.Context, userID, friendID int64) error {
-	err := r.db.WithContext(ctx).
+	result := r.db.WithContext(ctx).
 		Model(&model.Friendship{}).
 		Where("user_id = ? AND friend_id = ? AND status = 0", userID, friendID).
-		Update("status", 1).
-		Update("updated_at", time.Now()).Error
-	if err != nil {
-		return fmt.Errorf("accept friendship failed: %w", err)
+		Updates(map[string]interface{}{
+			"status":     1,
+			"updated_at": time.Now(),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("accept friendship failed: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+// AcceptAndCreateReverse 在事务中接受好友请求并创建反向关系
+func (r *friendRepository) AcceptAndCreateReverse(ctx context.Context, userID, friendID int64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 1. 更新原始好友请求状态
+		result := tx.Model(&model.Friendship{}).
+			Where("user_id = ? AND friend_id = ? AND status = 0", userID, friendID).
+			Updates(map[string]interface{}{
+				"status":     1,
+				"updated_at": time.Now(),
+			})
+		if result.Error != nil {
+			return fmt.Errorf("accept friendship failed: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+
+		// 2. 创建反向好友关系（双向）
+		reverse := &model.Friendship{
+			UserID:   friendID,
+			FriendID: userID,
+			Status:   1,
+		}
+		if err := tx.Create(reverse).Error; err != nil {
+			return fmt.Errorf("create reverse friendship failed: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *friendRepository) GetByUserAndFriend(ctx context.Context, userID, friendID int64) (*model.Friendship, error) {

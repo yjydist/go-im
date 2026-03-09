@@ -50,13 +50,7 @@ func (h *UserHandler) Register(c *gin.Context) {
 	}
 
 	if err := h.userService.Register(c.Request.Context(), req.Username, req.Password, req.Nickname); err != nil {
-		code, isBiz := service.ParseBusinessError(err)
-		if isBiz {
-			response.Error(c, code)
-		} else {
-			h.logger.Error("register failed", zap.Error(err))
-			response.Error(c, errcode.ErrInternal)
-		}
+		handleServiceError(c, h.logger, "register failed", err)
 		return
 	}
 
@@ -91,13 +85,7 @@ func (h *UserHandler) Login(c *gin.Context) {
 
 	token, err := h.userService.Login(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
-		code, isBiz := service.ParseBusinessError(err)
-		if isBiz {
-			response.Error(c, code)
-		} else {
-			h.logger.Error("login failed", zap.Error(err))
-			response.Error(c, errcode.ErrInternal)
-		}
+		handleServiceError(c, h.logger, "login failed", err)
 		return
 	}
 
@@ -128,13 +116,7 @@ func (h *UserHandler) GetUserInfo(c *gin.Context) {
 
 	user, err := h.userService.GetUserInfo(c.Request.Context(), userID)
 	if err != nil {
-		code, isBiz := service.ParseBusinessError(err)
-		if isBiz {
-			response.Error(c, code)
-		} else {
-			h.logger.Error("get user info failed", zap.Error(err))
-			response.Error(c, errcode.ErrInternal)
-		}
+		handleServiceError(c, h.logger, "get user info failed", err)
 		return
 	}
 

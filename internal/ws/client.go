@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -31,6 +31,13 @@ const (
 	heartbeatInterval = 60 * time.Second
 )
 
+// kafkaSendMsg 异步 Kafka 写入任务
+type kafkaSendMsg struct {
+	chatData ChatData
+	kafkaMsg KafkaChatMsg
+	msgBytes []byte
+}
+
 // Client 单个长连接对象
 type Client struct {
 	UserID int64
@@ -44,6 +51,8 @@ type Client struct {
 
 	// kafkaWriter 用于写入 Kafka
 	kafkaWriter KafkaWriter
+	// kafkaCh 异步 Kafka 写入通道
+	kafkaCh chan kafkaSendMsg
 	// redisRepo 用于 Redis 操作
 	redisRepo repository.RedisRepository
 	// groupRepo 用于群成员 DB 查询（Redis 缓存未命中时回退）
@@ -73,6 +82,7 @@ func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWr
 		logger:      logger,
 		closeCh:     make(chan struct{}),
 		kafkaWriter: kafkaWriter,
+		kafkaCh:     make(chan kafkaSendMsg, sendChanSize),
 		redisRepo:   redisRepo,
 		groupRepo:   groupRepo,
 		wsRPCAddr:   wsRPCAddr,
@@ -83,6 +93,7 @@ func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWr
 func (c *Client) Start() {
 	go c.readPump()
 	go c.writePump()
+	go c.kafkaWorker()
 
 	// 注册在线状态
 	ctx := context.Background()
@@ -120,9 +131,9 @@ func (c *Client) readPump() {
 	defer func() {
 		c.hub.Unregister(c)
 		c.Close()
-		// 清除在线状态
+		// 清除在线状态（仅当值匹配本连接地址时才删除）
 		ctx := context.Background()
-		if err := c.redisRepo.DelOnline(ctx, c.UserID); err != nil {
+		if err := c.redisRepo.DelOnline(ctx, c.UserID, c.wsRPCAddr); err != nil {
 			c.logger.Error("delete online status failed",
 				zap.Int64("user_id", c.UserID),
 				zap.Error(err),
@@ -226,6 +237,28 @@ func (c *Client) handleChat(data json.RawMessage) {
 		return
 	}
 
+	// 输入校验
+	if chatData.MsgID == "" {
+		c.sendError(400, "msg_id is required")
+		return
+	}
+	if chatData.ChatType != 1 && chatData.ChatType != 2 {
+		c.sendError(400, "invalid chat_type, must be 1 or 2")
+		return
+	}
+	if chatData.ToID <= 0 {
+		c.sendError(400, "invalid to_id")
+		return
+	}
+	if chatData.ContentType < 1 || chatData.ContentType > 3 {
+		c.sendError(400, "invalid content_type, must be 1-3")
+		return
+	}
+	if chatData.Content == "" {
+		c.sendError(400, "content is required")
+		return
+	}
+
 	ctx := context.Background()
 
 	// 群聊需要验证发送者是否为群成员
@@ -297,29 +330,29 @@ func (c *Client) handleChat(data json.RawMessage) {
 		return
 	}
 
-	// 写入 Kafka
-	if err := c.kafkaWriter.WriteMessages(ctx, KafkaMessage{
-		Key:   []byte(fmt.Sprintf("%d", c.UserID)),
-		Value: msgBytes,
-	}); err != nil {
-		c.logger.Error("write kafka failed",
+	// 异步发送到 Kafka（不阻塞 readPump）
+	select {
+	case c.kafkaCh <- kafkaSendMsg{chatData: chatData, kafkaMsg: kafkaMsg, msgBytes: msgBytes}:
+		// 立即发送 ACK（at-most-once 语义，Kafka 失败时 dedup key 会回滚让客户端重试）
+		c.sendAck(chatData.MsgID)
+	default:
+		c.logger.Warn("kafka send channel full",
 			zap.String("msg_id", chatData.MsgID),
 			zap.Int64("user_id", c.UserID),
-			zap.Error(err),
 		)
-		c.sendError(500, "message send failed")
-		return
+		// 回滚 dedup key
+		if delErr := c.redisRepo.DelMsgDedup(ctx, chatData.MsgID); delErr != nil {
+			c.logger.Error("rollback dedup key failed", zap.String("msg_id", chatData.MsgID), zap.Error(delErr))
+		}
+		c.sendError(500, "server busy")
 	}
 
-	c.logger.Info("message sent to kafka",
+	c.logger.Debug("message queued for kafka",
 		zap.String("msg_id", chatData.MsgID),
 		zap.Int64("from_id", c.UserID),
 		zap.Int64("to_id", chatData.ToID),
 		zap.Int("chat_type", chatData.ChatType),
 	)
-
-	// 发送 ACK
-	c.sendAck(chatData.MsgID)
 }
 
 // checkGroupMemberFromDB 从 DB 查询群成员资格，并回填 Redis 缓存
@@ -369,6 +402,50 @@ func (c *Client) backfillGroupMembersCache(groupID int64) {
 			zap.Int64("group_id", groupID),
 			zap.Error(err),
 		)
+	}
+}
+
+// kafkaWorker 异步消费 kafkaCh 并写入 Kafka，避免阻塞 readPump
+func (c *Client) kafkaWorker() {
+	for {
+		select {
+		case task, ok := <-c.kafkaCh:
+			if !ok {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := c.kafkaWriter.WriteMessages(ctx, KafkaMessage{
+				Key:   []byte(strconv.FormatInt(c.UserID, 10)),
+				Value: task.msgBytes,
+			})
+			cancel()
+
+			if err != nil {
+				c.logger.Error("kafka write failed, rolling back dedup key",
+					zap.String("msg_id", task.chatData.MsgID),
+					zap.Int64("from_id", c.UserID),
+					zap.Error(err),
+				)
+				// 回滚 dedup key，让客户端可以重试
+				if delErr := c.redisRepo.DelMsgDedup(context.Background(), task.chatData.MsgID); delErr != nil {
+					c.logger.Error("rollback dedup key failed",
+						zap.String("msg_id", task.chatData.MsgID),
+						zap.Error(delErr),
+					)
+				}
+				continue
+			}
+
+			c.logger.Info("message written to kafka",
+				zap.String("msg_id", task.chatData.MsgID),
+				zap.Int64("from_id", c.UserID),
+				zap.Int64("to_id", task.chatData.ToID),
+				zap.Int("chat_type", task.chatData.ChatType),
+			)
+
+		case <-c.closeCh:
+			return
+		}
 	}
 }
 

@@ -60,13 +60,14 @@ func (c *Consumer) Start(ctx context.Context) {
 		default:
 		}
 
-		// 读取消息
-		msg, err := c.reader.ReadMessage(ctx)
+		// 使用 FetchMessage 而非 ReadMessage，避免自动提交 offset。
+		// 只有消息处理成功后才手动提交，防止处理失败时丢失消息。
+		msg, err := c.reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return // context cancelled
 			}
-			c.logger.Error("read kafka message failed", zap.Error(err))
+			c.logger.Error("fetch kafka message failed", zap.Error(err))
 			continue
 		}
 
@@ -77,6 +78,10 @@ func (c *Consumer) Start(ctx context.Context) {
 				zap.Error(err),
 				zap.ByteString("value", msg.Value),
 			)
+			// 格式错误的消息无法恢复，提交 offset 跳过
+			if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
+				c.logger.Error("commit skipped message failed", zap.Error(commitErr))
+			}
 			continue
 		}
 
@@ -89,7 +94,17 @@ func (c *Consumer) Start(ctx context.Context) {
 
 		// 交给 Pusher 处理
 		if err := c.pusher.HandleMessage(ctx, &chatMsg); err != nil {
-			c.logger.Error("handle message failed",
+			c.logger.Error("handle message failed, will retry on next consume",
+				zap.String("msg_id", chatMsg.MsgID),
+				zap.Error(err),
+			)
+			// 处理失败不提交 offset，下次消费会重试
+			continue
+		}
+
+		// 处理成功，提交 offset
+		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			c.logger.Error("commit message failed",
 				zap.String("msg_id", chatMsg.MsgID),
 				zap.Error(err),
 			)

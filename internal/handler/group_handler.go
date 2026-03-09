@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 	"github.com/yjydist/go-im/internal/middleware"
 	"github.com/yjydist/go-im/internal/pkg/errcode"
@@ -50,8 +48,7 @@ func (h *GroupHandler) CreateGroup(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	group, err := h.groupService.CreateGroup(c.Request.Context(), req.Name, userID)
 	if err != nil {
-		h.logger.Error("create group failed", zap.Error(err))
-		response.Error(c, errcode.ErrInternal)
+		handleServiceError(c, h.logger, "create group failed", err)
 		return
 	}
 
@@ -82,13 +79,7 @@ func (h *GroupHandler) JoinGroup(c *gin.Context) {
 
 	userID := middleware.GetUserID(c)
 	if err := h.groupService.JoinGroup(c.Request.Context(), req.GroupID, userID); err != nil {
-		code, isBiz := service.ParseBusinessError(err)
-		if isBiz {
-			response.Error(c, code)
-		} else {
-			h.logger.Error("join group failed", zap.Error(err))
-			response.Error(c, errcode.ErrInternal)
-		}
+		handleServiceError(c, h.logger, "join group failed", err)
 		return
 	}
 
@@ -107,8 +98,7 @@ func (h *GroupHandler) ListMyGroups(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	groups, err := h.groupService.ListMyGroups(c.Request.Context(), userID)
 	if err != nil {
-		h.logger.Error("list my groups failed", zap.Error(err))
-		response.Error(c, errcode.ErrInternal)
+		handleServiceError(c, h.logger, "list my groups failed", err)
 		return
 	}
 
@@ -131,16 +121,15 @@ func (h *GroupHandler) ListMembers(c *gin.Context) {
 		return
 	}
 
-	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
-	if err != nil {
+	var groupID int64
+	if _, err := parseID(groupIDStr, &groupID); err != nil {
 		response.ErrorWithMsg(c, errcode.ErrBadRequest, "invalid group_id")
 		return
 	}
 
 	members, err := h.groupService.ListMembers(c.Request.Context(), groupID)
 	if err != nil {
-		h.logger.Error("list group members failed", zap.Error(err))
-		response.Error(c, errcode.ErrInternal)
+		handleServiceError(c, h.logger, "list group members failed", err)
 		return
 	}
 

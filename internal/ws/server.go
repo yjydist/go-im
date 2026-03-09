@@ -147,13 +147,18 @@ func (s *Server) HandleInternalPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 验证内部 API Key
-	if s.internalAPIKey != "" {
-		apiKey := r.Header.Get("X-API-Key")
-		if apiKey != s.internalAPIKey {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	// 验证内部 API Key（空 key 视为未配置，拒绝所有请求以防未授权访问）
+	if s.internalAPIKey == "" {
+		s.logger.Warn("internal API key not configured, rejecting push request",
+			zap.String("remote_addr", r.RemoteAddr),
+		)
+		http.Error(w, "internal api key not configured", http.StatusForbidden)
+		return
+	}
+	apiKey := r.Header.Get("X-API-Key")
+	if apiKey != s.internalAPIKey {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	var msg PushMsg

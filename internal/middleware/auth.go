@@ -57,5 +57,9 @@ func GetUserID(c *gin.Context) int64 {
 	if !exists {
 		return 0
 	}
-	return userID.(int64)
+	id, ok := userID.(int64)
+	if !ok {
+		return 0
+	}
+	return id
 }

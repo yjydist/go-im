@@ -26,6 +26,11 @@ func main() {
 		log.Fatalf("load config failed: %v", err)
 	}
 
+	// 校验配置安全性
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config validation failed: %v", err)
+	}
+
 	// 初始化日志
 	if err := logger.Init(cfg.Log.Level, cfg.Log.Filename); err != nil {
 		log.Fatalf("init logger failed: %v", err)
@@ -63,8 +68,10 @@ func main() {
 	// 创建 WS 对外 HTTP Server
 	wsAddr := fmt.Sprintf(":%d", cfg.WSServer.Port)
 	wsSrv := &http.Server{
-		Addr:    wsAddr,
-		Handler: wsMux,
+		Addr:              wsAddr,
+		Handler:           wsMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// 启动内部 Push 接口
@@ -73,8 +80,11 @@ func main() {
 
 	rpcAddr := fmt.Sprintf(":%d", cfg.WSServer.RPCPort)
 	rpcSrv := &http.Server{
-		Addr:    rpcAddr,
-		Handler: internalMux,
+		Addr:         rpcAddr,
+		Handler:      internalMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	}
 
 	// 监听系统信号

@@ -62,7 +62,8 @@ func TestRedisRepo_DelOnline(t *testing.T) {
 
 	_ = repo.SetOnline(ctx, 2001, "10.0.0.1:9091", 5*time.Minute)
 
-	err := repo.DelOnline(ctx, 2001)
+	// 匹配时应删除
+	err := repo.DelOnline(ctx, 2001, "10.0.0.1:9091")
 	if err != nil {
 		t.Fatalf("DelOnline failed: %v", err)
 	}
@@ -70,6 +71,25 @@ func TestRedisRepo_DelOnline(t *testing.T) {
 	addr, _ := repo.GetOnline(ctx, 2001)
 	if addr != "" {
 		t.Errorf("expected empty addr after DelOnline, got %s", addr)
+	}
+}
+
+func TestRedisRepo_DelOnline_Mismatch(t *testing.T) {
+	setupTestRedis(t)
+	repo := NewRedisRepository()
+	ctx := context.Background()
+
+	_ = repo.SetOnline(ctx, 2002, "10.0.0.2:9091", 5*time.Minute)
+
+	// 不匹配时不应删除
+	err := repo.DelOnline(ctx, 2002, "10.0.0.99:9091")
+	if err != nil {
+		t.Fatalf("DelOnline failed: %v", err)
+	}
+
+	addr, _ := repo.GetOnline(ctx, 2002)
+	if addr != "10.0.0.2:9091" {
+		t.Errorf("expected addr preserved after mismatch DelOnline, got %s", addr)
 	}
 }
 

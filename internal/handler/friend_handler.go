@@ -47,13 +47,7 @@ func (h *FriendHandler) AddFriend(c *gin.Context) {
 
 	userID := middleware.GetUserID(c)
 	if err := h.friendService.AddFriend(c.Request.Context(), userID, req.FriendID); err != nil {
-		code, isBiz := service.ParseBusinessError(err)
-		if isBiz {
-			response.Error(c, code)
-		} else {
-			h.logger.Error("add friend failed", zap.Error(err))
-			response.Error(c, errcode.ErrInternal)
-		}
+		handleServiceError(c, h.logger, "add friend failed", err)
 		return
 	}
 
@@ -84,13 +78,7 @@ func (h *FriendHandler) AcceptFriend(c *gin.Context) {
 
 	userID := middleware.GetUserID(c)
 	if err := h.friendService.AcceptFriend(c.Request.Context(), userID, req.FriendID); err != nil {
-		code, isBiz := service.ParseBusinessError(err)
-		if isBiz {
-			response.Error(c, code)
-		} else {
-			h.logger.Error("accept friend failed", zap.Error(err))
-			response.Error(c, errcode.ErrInternal)
-		}
+		handleServiceError(c, h.logger, "accept friend failed", err)
 		return
 	}
 
@@ -109,8 +97,7 @@ func (h *FriendHandler) ListFriends(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	friends, err := h.friendService.ListFriends(c.Request.Context(), userID)
 	if err != nil {
-		h.logger.Error("list friends failed", zap.Error(err))
-		response.Error(c, errcode.ErrInternal)
+		handleServiceError(c, h.logger, "list friends failed", err)
 		return
 	}
 
