@@ -37,6 +37,11 @@ func main() {
 		log.Fatalf("init redis failed: %v", err)
 	}
 
+	// 初始化 MySQL（WS 网关需要 MySQL 来回退查询群成员资格）
+	if err := repository.InitMySQL(&cfg.MySQL, logger.L); err != nil {
+		log.Fatalf("init mysql failed: %v", err)
+	}
+
 	// 创建 Hub 并启动
 	hub := ws.NewHub(logger.L)
 	go hub.Run()
@@ -44,8 +49,11 @@ func main() {
 	// 创建 RedisRepo
 	redisRepo := repository.NewRedisRepository()
 
+	// 创建 GroupRepo（用于群成员缓存未命中时回退 DB 查询）
+	groupRepo := repository.NewGroupRepository()
+
 	// 创建 WS Server
-	server := ws.NewServer(cfg, hub, redisRepo, logger.L)
+	server := ws.NewServer(cfg, hub, redisRepo, groupRepo, logger.L)
 	defer server.Close()
 
 	// 注册 WebSocket 路由

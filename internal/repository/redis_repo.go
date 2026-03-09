@@ -29,7 +29,10 @@ type RedisRepository interface {
 	// 群成员缓存
 	SetGroupMembers(ctx context.Context, groupID int64, memberIDs []int64, ttl time.Duration) error
 	GetGroupMembers(ctx context.Context, groupID int64) ([]int64, error)
-	IsGroupMember(ctx context.Context, groupID, userID int64) (bool, error)
+	// IsGroupMember 检查用户是否为群成员。
+	// 返回 (isMember, cacheMiss, err)。
+	// 当 cacheMiss == true 时，调用方应回退到 DB 查询。
+	IsGroupMember(ctx context.Context, groupID, userID int64) (isMember bool, cacheMiss bool, err error)
 	DelGroupMembers(ctx context.Context, groupID int64) error
 }
 
@@ -118,18 +121,19 @@ func (r *redisRepository) GetGroupMembers(ctx context.Context, groupID int64) ([
 	return ids, nil
 }
 
-func (r *redisRepository) IsGroupMember(ctx context.Context, groupID, userID int64) (bool, error) {
+func (r *redisRepository) IsGroupMember(ctx context.Context, groupID, userID int64) (bool, bool, error) {
 	key := fmt.Sprintf(keyGroupMembers, groupID)
 	// 先检查 key 是否存在（缓存是否命中）
 	exists, err := r.rdb.Exists(ctx, key).Result()
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if exists == 0 {
-		// 缓存未命中，无法判断，返回 true 放行
-		return true, nil
+		// 缓存未命中，返回 cacheMiss=true，由调用方回退到 DB 查询
+		return false, true, nil
 	}
-	return r.rdb.SIsMember(ctx, key, userID).Result()
+	isMember, err := r.rdb.SIsMember(ctx, key, userID).Result()
+	return isMember, false, err
 }
 
 func (r *redisRepository) DelGroupMembers(ctx context.Context, groupID int64) error {

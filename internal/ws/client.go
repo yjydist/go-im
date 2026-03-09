@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/yjydist/go-im/internal/repository"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const (
@@ -44,6 +46,8 @@ type Client struct {
 	kafkaWriter KafkaWriter
 	// redisRepo 用于 Redis 操作
 	redisRepo repository.RedisRepository
+	// groupRepo 用于群成员 DB 查询（Redis 缓存未命中时回退）
+	groupRepo repository.GroupRepository
 	// wsRPCAddr WS 网关的内部 RPC 地址
 	wsRPCAddr string
 }
@@ -60,7 +64,7 @@ type KafkaMessage struct {
 }
 
 // NewClient 创建客户端连接
-func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWriter, redisRepo repository.RedisRepository, wsRPCAddr string, logger *zap.Logger) *Client {
+func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWriter, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, wsRPCAddr string, logger *zap.Logger) *Client {
 	return &Client{
 		UserID:      userID,
 		conn:        conn,
@@ -70,6 +74,7 @@ func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWr
 		closeCh:     make(chan struct{}),
 		kafkaWriter: kafkaWriter,
 		redisRepo:   redisRepo,
+		groupRepo:   groupRepo,
 		wsRPCAddr:   wsRPCAddr,
 	}
 }
@@ -225,7 +230,7 @@ func (c *Client) handleChat(data json.RawMessage) {
 
 	// 群聊需要验证发送者是否为群成员
 	if chatData.ChatType == 2 {
-		isMember, err := c.redisRepo.IsGroupMember(ctx, chatData.ToID, c.UserID)
+		isMember, cacheMiss, err := c.redisRepo.IsGroupMember(ctx, chatData.ToID, c.UserID)
 		if err != nil {
 			c.logger.Error("check group member failed",
 				zap.Int64("user_id", c.UserID),
@@ -234,6 +239,19 @@ func (c *Client) handleChat(data json.RawMessage) {
 			)
 			c.sendError(500, "server error")
 			return
+		}
+		if cacheMiss {
+			// Redis 缓存未命中，回退到 DB 查询
+			isMember, err = c.checkGroupMemberFromDB(ctx, chatData.ToID, c.UserID)
+			if err != nil {
+				c.logger.Error("check group member from DB failed",
+					zap.Int64("user_id", c.UserID),
+					zap.Int64("group_id", chatData.ToID),
+					zap.Error(err),
+				)
+				c.sendError(500, "server error")
+				return
+			}
 		}
 		if !isMember {
 			c.logger.Warn("non-member tried to send group message",
@@ -302,6 +320,56 @@ func (c *Client) handleChat(data json.RawMessage) {
 
 	// 发送 ACK
 	c.sendAck(chatData.MsgID)
+}
+
+// checkGroupMemberFromDB 从 DB 查询群成员资格，并回填 Redis 缓存
+func (c *Client) checkGroupMemberFromDB(ctx context.Context, groupID, userID int64) (bool, error) {
+	if c.groupRepo == nil {
+		// groupRepo 未配置（不应该发生），拒绝放行以保安全
+		c.logger.Warn("groupRepo is nil, denying group message",
+			zap.Int64("user_id", userID),
+			zap.Int64("group_id", groupID),
+		)
+		return false, nil
+	}
+
+	_, err := c.groupRepo.GetMember(ctx, groupID, userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil // 非群成员
+		}
+		return false, err // DB 查询出错
+	}
+
+	// 成员存在，异步回填 Redis 缓存（加载该群所有成员）
+	go c.backfillGroupMembersCache(groupID)
+
+	return true, nil
+}
+
+// backfillGroupMembersCache 异步回填群成员 Redis 缓存
+func (c *Client) backfillGroupMembersCache(groupID int64) {
+	if c.groupRepo == nil {
+		return
+	}
+	ctx := context.Background()
+	memberIDs, err := c.groupRepo.ListMemberIDs(ctx, groupID)
+	if err != nil {
+		c.logger.Error("backfill group members cache: list member IDs failed",
+			zap.Int64("group_id", groupID),
+			zap.Error(err),
+		)
+		return
+	}
+	if len(memberIDs) == 0 {
+		return
+	}
+	if err := c.redisRepo.SetGroupMembers(ctx, groupID, memberIDs, 30*time.Minute); err != nil {
+		c.logger.Error("backfill group members cache: set redis failed",
+			zap.Int64("group_id", groupID),
+			zap.Error(err),
+		)
+	}
 }
 
 // sendAck 发送 ACK 确认

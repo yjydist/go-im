@@ -41,6 +41,7 @@ type Server struct {
 	hub            *Hub
 	kafkaWriter    *kafkaWriterAdapter
 	redisRepo      repository.RedisRepository
+	groupRepo      repository.GroupRepository
 	upgrader       websocket.Upgrader
 	wsRPCAddr      string
 	jwtSecret      string
@@ -65,7 +66,7 @@ func (a *kafkaWriterAdapter) WriteMessages(ctx context.Context, msgs ...KafkaMes
 }
 
 // NewServer 创建 WS 网关服务
-func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepository, logger *zap.Logger) *Server {
+func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, logger *zap.Logger) *Server {
 	// 创建 Kafka Writer
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  cfg.Kafka.Brokers,
@@ -79,6 +80,7 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 		hub:            hub,
 		kafkaWriter:    &kafkaWriterAdapter{writer: writer},
 		redisRepo:      redisRepo,
+		groupRepo:      groupRepo,
 		upgrader:       NewUpgrader(cfg.WSServer.AllowedOrigins),
 		wsRPCAddr:      wsRPCAddr,
 		jwtSecret:      cfg.JWT.Secret,
@@ -125,7 +127,7 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// 创建 Client 并启动
-	client := NewClient(claims.UserID, conn, s.hub, s.kafkaWriter, s.redisRepo, s.wsRPCAddr, s.logger)
+	client := NewClient(claims.UserID, conn, s.hub, s.kafkaWriter, s.redisRepo, s.groupRepo, s.wsRPCAddr, s.logger)
 	s.hub.Register(client)
 	client.Start()
 }

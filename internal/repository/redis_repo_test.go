@@ -210,3 +210,61 @@ func TestRedisRepo_SetGroupMembers_Overwrite(t *testing.T) {
 		t.Errorf("expected 2 members after overwrite, got %d", len(got))
 	}
 }
+
+// --- IsGroupMember 测试 ---
+
+func TestRedisRepo_IsGroupMember_CacheHit_IsMember(t *testing.T) {
+	setupTestRedis(t)
+	repo := NewRedisRepository()
+	ctx := context.Background()
+
+	_ = repo.SetGroupMembers(ctx, 500, []int64{1, 2, 3}, 10*time.Minute)
+
+	isMember, cacheMiss, err := repo.IsGroupMember(ctx, 500, 2)
+	if err != nil {
+		t.Fatalf("IsGroupMember failed: %v", err)
+	}
+	if cacheMiss {
+		t.Error("expected cacheMiss=false, got true")
+	}
+	if !isMember {
+		t.Error("expected isMember=true, got false")
+	}
+}
+
+func TestRedisRepo_IsGroupMember_CacheHit_NotMember(t *testing.T) {
+	setupTestRedis(t)
+	repo := NewRedisRepository()
+	ctx := context.Background()
+
+	_ = repo.SetGroupMembers(ctx, 600, []int64{1, 2, 3}, 10*time.Minute)
+
+	isMember, cacheMiss, err := repo.IsGroupMember(ctx, 600, 999)
+	if err != nil {
+		t.Fatalf("IsGroupMember failed: %v", err)
+	}
+	if cacheMiss {
+		t.Error("expected cacheMiss=false, got true")
+	}
+	if isMember {
+		t.Error("expected isMember=false, got true")
+	}
+}
+
+func TestRedisRepo_IsGroupMember_CacheMiss(t *testing.T) {
+	setupTestRedis(t)
+	repo := NewRedisRepository()
+	ctx := context.Background()
+
+	// 不设置任何缓存，直接查询
+	isMember, cacheMiss, err := repo.IsGroupMember(ctx, 99999, 1)
+	if err != nil {
+		t.Fatalf("IsGroupMember failed: %v", err)
+	}
+	if !cacheMiss {
+		t.Error("expected cacheMiss=true, got false")
+	}
+	if isMember {
+		t.Error("expected isMember=false on cache miss, got true")
+	}
+}
