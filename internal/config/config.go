@@ -38,15 +38,22 @@ type WSServerConfig struct {
 }
 
 type MySQLConfig struct {
-	DSN          string `mapstructure:"dsn"`
-	MaxOpenConns int    `mapstructure:"max_open_conns"`
-	MaxIdleConns int    `mapstructure:"max_idle_conns"`
+	DSN            string `mapstructure:"dsn"`
+	MaxOpenConns   int    `mapstructure:"max_open_conns"`
+	MaxIdleConns   int    `mapstructure:"max_idle_conns"`
+	ConnMaxLifeSec int    `mapstructure:"conn_max_life_sec"` // 连接最大生命周期（秒），默认 300（5 分钟）
+	ConnMaxIdleSec int    `mapstructure:"conn_max_idle_sec"` // 空闲连接最大存活时间（秒），默认 180（3 分钟）
 }
 
 type RedisConfig struct {
-	Addr     string `mapstructure:"addr"`
-	Password string `mapstructure:"password"`
-	DB       int    `mapstructure:"db"`
+	Addr           string `mapstructure:"addr"`
+	Password       string `mapstructure:"password"`
+	DB             int    `mapstructure:"db"`
+	PoolSize       int    `mapstructure:"pool_size"`        // 连接池大小，0 表示使用 go-redis 默认值（10 * NumCPU）
+	MinIdleConns   int    `mapstructure:"min_idle_conns"`   // 最小空闲连接数
+	DialTimeoutMs  int    `mapstructure:"dial_timeout_ms"`  // 拨号超时（毫秒），默认 5000
+	ReadTimeoutMs  int    `mapstructure:"read_timeout_ms"`  // 读超时（毫秒），默认 3000
+	WriteTimeoutMs int    `mapstructure:"write_timeout_ms"` // 写超时（毫秒），默认 3000
 }
 
 type KafkaConfig struct {

@@ -20,11 +20,18 @@ mysql:
   dsn: "root:changeme@tcp(localhost:3306)/go_im?charset=utf8mb4&parseTime=True&loc=Local"
   max_open_conns: 100
   max_idle_conns: 20
+  conn_max_life_sec: 300   # 连接最大生命周期（秒），5 分钟
+  conn_max_idle_sec: 180   # 空闲连接最大存活时间（秒），3 分钟
 
 redis:
   addr: "localhost:6379"
   password: ""
   db: 0
+  pool_size: 0             # 0 表示使用 go-redis 默认值（10 * NumCPU）
+  min_idle_conns: 5
+  dial_timeout_ms: 5000    # 拨号超时 5 秒
+  read_timeout_ms: 3000    # 读超时 3 秒
+  write_timeout_ms: 3000   # 写超时 3 秒
 
 kafka:
   brokers: ["localhost:9092"]
