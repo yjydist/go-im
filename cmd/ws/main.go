@@ -14,6 +14,7 @@ import (
 	"github.com/yjydist/go-im/internal/pkg/logger"
 	"github.com/yjydist/go-im/internal/repository"
 	"github.com/yjydist/go-im/internal/ws"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -91,11 +92,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// errCh 用于 goroutine 向主线程报告致命启动错误
+	errCh := make(chan error, 2)
+
 	// 启动 WS 对外服务
 	go func() {
 		logger.L.Sugar().Infof("WS server starting on %s", wsAddr)
 		if err := wsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("start ws server failed: %v", err)
+			errCh <- fmt.Errorf("start ws server failed: %w", err)
 		}
 	}()
 
@@ -103,13 +107,17 @@ func main() {
 	go func() {
 		logger.L.Sugar().Infof("WS internal RPC server starting on %s", rpcAddr)
 		if err := rpcSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("start ws internal rpc server failed: %v", err)
+			errCh <- fmt.Errorf("start ws internal rpc server failed: %w", err)
 		}
 	}()
 
-	// 阻塞等待信号
-	<-ctx.Done()
-	logger.L.Info("WS server shutting down...")
+	// 阻塞等待信号或启动错误
+	select {
+	case <-ctx.Done():
+		logger.L.Info("WS server shutting down (signal received)...")
+	case err := <-errCh:
+		logger.L.Error("WS server startup failed, shutting down...", zap.Error(err))
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

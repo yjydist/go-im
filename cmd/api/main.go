@@ -101,16 +101,23 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// errCh 用于 goroutine 向主线程报告致命启动错误
+	errCh := make(chan error, 1)
+
 	go func() {
 		logger.L.Sugar().Infof("API server starting on %s", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("start api server failed: %v", err)
+			errCh <- fmt.Errorf("start api server failed: %w", err)
 		}
 	}()
 
-	// 阻塞等待信号
-	<-ctx.Done()
-	logger.L.Info("API server shutting down...")
+	// 阻塞等待信号或启动错误
+	select {
+	case <-ctx.Done():
+		logger.L.Info("API server shutting down (signal received)...")
+	case err := <-errCh:
+		logger.L.Sugar().Errorf("API server startup failed: %v", err)
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
