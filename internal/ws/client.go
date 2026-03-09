@@ -120,9 +120,9 @@ func (c *Client) readPump() {
 	defer func() {
 		c.hub.Unregister(c)
 		c.Close()
-		// 清除在线状态
+		// 清除在线状态（仅当值匹配本连接地址时才删除）
 		ctx := context.Background()
-		if err := c.redisRepo.DelOnline(ctx, c.UserID); err != nil {
+		if err := c.redisRepo.DelOnline(ctx, c.UserID, c.wsRPCAddr); err != nil {
 			c.logger.Error("delete online status failed",
 				zap.Int64("user_id", c.UserID),
 				zap.Error(err),

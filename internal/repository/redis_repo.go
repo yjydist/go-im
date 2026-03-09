@@ -16,15 +16,54 @@ const (
 	keyGroupMembers = "group:members:%d" // group:members:{group_id} -> SET of user_ids
 )
 
+// Lua 脚本：条件删除在线状态（仅当值匹配时删除）
+var delOnlineScript = redis.NewScript(`
+local key = KEYS[1]
+local expected = ARGV[1]
+local val = redis.call('GET', key)
+if val == expected then
+    return redis.call('DEL', key)
+end
+return 0
+`)
+
+// Lua 脚本：原子检查群成员（EXISTS + SISMEMBER 合并）
+var isGroupMemberScript = redis.NewScript(`
+local key = KEYS[1]
+local uid = ARGV[1]
+if redis.call('EXISTS', key) == 0 then
+    return -1  -- 缓存未命中
+end
+return redis.call('SISMEMBER', key, uid)
+`)
+
+// Lua 脚本：原子设置群成员缓存（DEL + SADD + EXPIRE）
+var setGroupMembersScript = redis.NewScript(`
+local key = KEYS[1]
+local ttl = tonumber(ARGV[1])
+local count = tonumber(ARGV[2])
+redis.call('DEL', key)
+if count > 0 then
+    local members = {}
+    for i = 3, 3 + count - 1 do
+        members[#members + 1] = ARGV[i]
+    end
+    redis.call('SADD', key, unpack(members))
+    redis.call('EXPIRE', key, ttl)
+end
+return 1
+`)
+
 // RedisRepository Redis 数据访问接口
 type RedisRepository interface {
 	// 在线状态
 	SetOnline(ctx context.Context, userID int64, wsAddr string, ttl time.Duration) error
 	GetOnline(ctx context.Context, userID int64) (string, error)
-	DelOnline(ctx context.Context, userID int64) error
+	DelOnline(ctx context.Context, userID int64, expectedAddr string) error
 
 	// 消息防重
 	SetMsgDedup(ctx context.Context, msgID string, ttl time.Duration) (bool, error)
+	DelMsgDedup(ctx context.Context, msgID string) error
 
 	// 群成员缓存
 	SetGroupMembers(ctx context.Context, groupID int64, memberIDs []int64, ttl time.Duration) error
@@ -62,9 +101,11 @@ func (r *redisRepository) GetOnline(ctx context.Context, userID int64) (string, 
 	return val, nil
 }
 
-func (r *redisRepository) DelOnline(ctx context.Context, userID int64) error {
+// DelOnline 条件删除在线状态：仅当当前值等于 expectedAddr 时才删除，
+// 防止旧连接的 readPump defer 删掉新连接的在线状态。
+func (r *redisRepository) DelOnline(ctx context.Context, userID int64, expectedAddr string) error {
 	key := fmt.Sprintf(keyOnline, userID)
-	return r.rdb.Del(ctx, key).Err()
+	return delOnlineScript.Run(ctx, r.rdb, []string{key}, expectedAddr).Err()
 }
 
 func (r *redisRepository) SetMsgDedup(ctx context.Context, msgID string, ttl time.Duration) (bool, error) {
@@ -83,22 +124,22 @@ func (r *redisRepository) SetMsgDedup(ctx context.Context, msgID string, ttl tim
 	return ok == "OK", nil
 }
 
+// DelMsgDedup 删除消息防重 key（Kafka 写入失败时回滚用）
+func (r *redisRepository) DelMsgDedup(ctx context.Context, msgID string) error {
+	key := fmt.Sprintf(keyMsgDedup, msgID)
+	return r.rdb.Del(ctx, key).Err()
+}
+
+// SetGroupMembers 使用 Lua 脚本原子地设置群成员缓存
 func (r *redisRepository) SetGroupMembers(ctx context.Context, groupID int64, memberIDs []int64, ttl time.Duration) error {
 	key := fmt.Sprintf(keyGroupMembers, groupID)
-	pipe := r.rdb.Pipeline()
-	// 先删除旧缓存
-	pipe.Del(ctx, key)
-	// 批量添加成员
-	members := make([]interface{}, len(memberIDs))
-	for i, id := range memberIDs {
-		members[i] = id
+	ttlSec := int(ttl.Seconds())
+	args := make([]interface{}, 0, len(memberIDs)+2)
+	args = append(args, ttlSec, len(memberIDs))
+	for _, id := range memberIDs {
+		args = append(args, id)
 	}
-	if len(members) > 0 {
-		pipe.SAdd(ctx, key, members...)
-		pipe.Expire(ctx, key, ttl)
-	}
-	_, err := pipe.Exec(ctx)
-	return err
+	return setGroupMembersScript.Run(ctx, r.rdb, []string{key}, args...).Err()
 }
 
 func (r *redisRepository) GetGroupMembers(ctx context.Context, groupID int64) ([]int64, error) {
@@ -121,19 +162,18 @@ func (r *redisRepository) GetGroupMembers(ctx context.Context, groupID int64) ([
 	return ids, nil
 }
 
+// IsGroupMember 使用 Lua 脚本原子地检查群成员
 func (r *redisRepository) IsGroupMember(ctx context.Context, groupID, userID int64) (bool, bool, error) {
 	key := fmt.Sprintf(keyGroupMembers, groupID)
-	// 先检查 key 是否存在（缓存是否命中）
-	exists, err := r.rdb.Exists(ctx, key).Result()
+	result, err := isGroupMemberScript.Run(ctx, r.rdb, []string{key}, userID).Int()
 	if err != nil {
 		return false, false, err
 	}
-	if exists == 0 {
-		// 缓存未命中，返回 cacheMiss=true，由调用方回退到 DB 查询
+	if result == -1 {
+		// 缓存未命中
 		return false, true, nil
 	}
-	isMember, err := r.rdb.SIsMember(ctx, key, userID).Result()
-	return isMember, false, err
+	return result == 1, false, nil
 }
 
 func (r *redisRepository) DelGroupMembers(ctx context.Context, groupID int64) error {
