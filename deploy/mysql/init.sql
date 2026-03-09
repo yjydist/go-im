@@ -55,7 +55,8 @@ CREATE TABLE messages (
     content_type TINYINT      NOT NULL DEFAULT 1,   -- 1:文本 2:图片 3:文件
     content      TEXT         NOT NULL,
     created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_to_time (to_id, created_at)
+    INDEX idx_to_time (to_id, created_at),
+    INDEX idx_chat_history (chat_type, from_id, to_id)
 ) ENGINE=InnoDB;
 
 -- 离线消息表
