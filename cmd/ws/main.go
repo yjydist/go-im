@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/yjydist/go-im/internal/config"
 	"github.com/yjydist/go-im/internal/pkg/logger"
@@ -48,22 +52,60 @@ func main() {
 	wsMux := http.NewServeMux()
 	wsMux.HandleFunc("/ws", server.HandleWS)
 
-	// 启动 WS 对外服务（客户端连接）
+	// 创建 WS 对外 HTTP Server
 	wsAddr := fmt.Sprintf(":%d", cfg.WSServer.Port)
-	go func() {
-		logger.L.Sugar().Infof("WS server starting on %s", wsAddr)
-		if err := http.ListenAndServe(wsAddr, wsMux); err != nil {
-			log.Fatalf("start ws server failed: %v", err)
-		}
-	}()
+	wsSrv := &http.Server{
+		Addr:    wsAddr,
+		Handler: wsMux,
+	}
 
-	// 启动内部 Push 接口（供 Push 服务调用）
+	// 启动内部 Push 接口
 	internalMux := http.NewServeMux()
 	internalMux.HandleFunc("/internal/push", server.HandleInternalPush)
 
 	rpcAddr := fmt.Sprintf(":%d", cfg.WSServer.RPCPort)
-	logger.L.Sugar().Infof("WS internal RPC server starting on %s", rpcAddr)
-	if err := http.ListenAndServe(rpcAddr, internalMux); err != nil {
-		log.Fatalf("start ws internal rpc server failed: %v", err)
+	rpcSrv := &http.Server{
+		Addr:    rpcAddr,
+		Handler: internalMux,
 	}
+
+	// 监听系统信号
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// 启动 WS 对外服务
+	go func() {
+		logger.L.Sugar().Infof("WS server starting on %s", wsAddr)
+		if err := wsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("start ws server failed: %v", err)
+		}
+	}()
+
+	// 启动内部 RPC 服务
+	go func() {
+		logger.L.Sugar().Infof("WS internal RPC server starting on %s", rpcAddr)
+		if err := rpcSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("start ws internal rpc server failed: %v", err)
+		}
+	}()
+
+	// 阻塞等待信号
+	<-ctx.Done()
+	logger.L.Info("WS server shutting down...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 先关闭 HTTP 服务（停止接收新连接）
+	if err := wsSrv.Shutdown(shutdownCtx); err != nil {
+		logger.L.Sugar().Errorf("WS server forced shutdown: %v", err)
+	}
+	if err := rpcSrv.Shutdown(shutdownCtx); err != nil {
+		logger.L.Sugar().Errorf("RPC server forced shutdown: %v", err)
+	}
+
+	// 停止 Hub（关闭所有客户端连接）
+	hub.Stop()
+
+	logger.L.Info("WS server stopped")
 }
