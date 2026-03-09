@@ -382,7 +382,7 @@ func TestMessageRepo_OfflineMessages(t *testing.T) {
 	}
 
 	// 拉取离线消息
-	msgs, err := msgRepo.ListOffline(ctx, 2)
+	msgs, maxOfflineID, err := msgRepo.ListOffline(ctx, 2)
 	if err != nil {
 		t.Fatalf("ListOffline failed: %v", err)
 	}
@@ -392,14 +392,17 @@ func TestMessageRepo_OfflineMessages(t *testing.T) {
 	if len(msgs) > 0 && msgs[0].Content != "offline msg" {
 		t.Errorf("expected content=offline msg, got %s", msgs[0].Content)
 	}
+	if maxOfflineID == 0 {
+		t.Error("expected maxOfflineID > 0")
+	}
 
-	// 删除离线消息
-	if err := msgRepo.DeleteOffline(ctx, 2); err != nil {
+	// 删除离线消息（只删 id <= maxOfflineID）
+	if err := msgRepo.DeleteOffline(ctx, 2, maxOfflineID); err != nil {
 		t.Fatalf("DeleteOffline failed: %v", err)
 	}
 
 	// 确认删除后为空
-	msgs, err = msgRepo.ListOffline(ctx, 2)
+	msgs, _, err = msgRepo.ListOffline(ctx, 2)
 	if err != nil {
 		t.Fatalf("ListOffline after delete failed: %v", err)
 	}

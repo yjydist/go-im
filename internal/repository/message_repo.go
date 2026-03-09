@@ -13,8 +13,8 @@ type MessageRepository interface {
 	Create(ctx context.Context, msg *model.Message) error
 	GetHistory(ctx context.Context, userID, targetID int64, chatType int8, cursorMsgID int64, limit int) ([]model.Message, error)
 	CreateOffline(ctx context.Context, offline *model.OfflineMessage) error
-	ListOffline(ctx context.Context, userID int64) ([]model.Message, error)
-	DeleteOffline(ctx context.Context, userID int64) error
+	ListOffline(ctx context.Context, userID int64) ([]model.Message, int64, error)
+	DeleteOffline(ctx context.Context, userID int64, maxID int64) error
 }
 
 type messageRepository struct {
@@ -66,23 +66,37 @@ func (r *messageRepository) CreateOffline(ctx context.Context, offline *model.Of
 	return nil
 }
 
-func (r *messageRepository) ListOffline(ctx context.Context, userID int64) ([]model.Message, error) {
-	var messages []model.Message
+func (r *messageRepository) ListOffline(ctx context.Context, userID int64) ([]model.Message, int64, error) {
+	// 先查最大 offline_messages.id，用于安全删除
+	var maxOfflineID int64
 	err := r.db.WithContext(ctx).
+		Table("offline_messages").
+		Where("user_id = ?", userID).
+		Select("COALESCE(MAX(id), 0)").
+		Scan(&maxOfflineID).Error
+	if err != nil {
+		return nil, 0, fmt.Errorf("get max offline id failed: %w", err)
+	}
+	if maxOfflineID == 0 {
+		return nil, 0, nil
+	}
+
+	var messages []model.Message
+	err = r.db.WithContext(ctx).
 		Table("messages").
 		Joins("JOIN offline_messages ON offline_messages.message_id = messages.id").
-		Where("offline_messages.user_id = ?", userID).
+		Where("offline_messages.user_id = ? AND offline_messages.id <= ?", userID, maxOfflineID).
 		Order("messages.id ASC").
 		Find(&messages).Error
 	if err != nil {
-		return nil, fmt.Errorf("list offline messages failed: %w", err)
+		return nil, 0, fmt.Errorf("list offline messages failed: %w", err)
 	}
-	return messages, nil
+	return messages, maxOfflineID, nil
 }
 
-func (r *messageRepository) DeleteOffline(ctx context.Context, userID int64) error {
+func (r *messageRepository) DeleteOffline(ctx context.Context, userID int64, maxID int64) error {
 	err := r.db.WithContext(ctx).
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND id <= ?", userID, maxID).
 		Delete(&model.OfflineMessage{}).Error
 	if err != nil {
 		return fmt.Errorf("delete offline messages failed: %w", err)

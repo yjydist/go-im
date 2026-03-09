@@ -28,16 +28,17 @@ func NewMessageService(logger *zap.Logger) MessageService {
 }
 
 func (s *messageService) GetOfflineMessages(ctx context.Context, userID int64) ([]model.Message, error) {
-	messages, err := s.msgRepo.ListOffline(ctx, userID)
+	messages, maxOfflineID, err := s.msgRepo.ListOffline(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 拉取后清除离线消息记录
-	if len(messages) > 0 {
-		if err := s.msgRepo.DeleteOffline(ctx, userID); err != nil {
+	// 拉取后清除已拉取的离线消息记录（只删 id <= maxOfflineID，避免竞态删除新到达消息）
+	if len(messages) > 0 && maxOfflineID > 0 {
+		if err := s.msgRepo.DeleteOffline(ctx, userID, maxOfflineID); err != nil {
 			s.logger.Error("delete offline messages failed",
 				zap.Int64("user_id", userID),
+				zap.Int64("max_offline_id", maxOfflineID),
 				zap.Error(err),
 			)
 			// 不返回错误，消息已经拉取成功
