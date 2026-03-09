@@ -76,7 +76,7 @@ func (s *friendService) AddFriend(ctx context.Context, userID, friendID int64) e
 
 func (s *friendService) AcceptFriend(ctx context.Context, userID, friendID int64) error {
 	// 查找对方发来的好友申请
-	_, err := s.friendRepo.GetByUserAndFriend(ctx, friendID, userID)
+	friendship, err := s.friendRepo.GetByUserAndFriend(ctx, friendID, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendNotFound)
@@ -84,20 +84,17 @@ func (s *friendService) AcceptFriend(ctx context.Context, userID, friendID int64
 		return fmt.Errorf("query friendship failed: %w", err)
 	}
 
-	// 更新状态为已接受
-	if err := s.friendRepo.Accept(ctx, friendID, userID); err != nil {
-		return err
+	// 检查状态是否为待确认
+	if friendship.Status != 0 {
+		return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendExist)
 	}
 
-	// 同时创建反向好友关系（双向）
-	reverseFriendship := &model.Friendship{
-		UserID:   userID,
-		FriendID: friendID,
-		Status:   1, // 已接受
-	}
-	if err := s.friendRepo.Create(ctx, reverseFriendship); err != nil {
-		// 如果反向关系已存在，忽略
-		s.logger.Warn("create reverse friendship failed", zap.Error(err))
+	// 在事务中：接受好友请求 + 创建反向关系
+	if err := s.friendRepo.AcceptAndCreateReverse(ctx, friendID, userID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrFriendNotFound)
+		}
+		return err
 	}
 
 	s.logger.Info("friend request accepted",
