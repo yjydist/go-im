@@ -20,7 +20,7 @@ redis:
   db: 0
 
 kafka:
-  brokers: ["kafka:9092"]
+  brokers: ["kafka:19092"]
   topic_chat: "chat_messages"
   consumer_group: "im_push_group"
 
