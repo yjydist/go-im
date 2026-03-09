@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/yjydist/go-im/internal/model"
@@ -20,6 +21,8 @@ const (
 	pushTimeout = 3 * time.Second
 	// 群成员缓存 TTL
 	groupMemberCacheTTL = 1 * time.Hour
+	// 群推送最大并发度
+	groupPushConcurrency = 20
 )
 
 // Pusher 消息路由与推送
@@ -147,22 +150,31 @@ func (p *Pusher) pushToGroup(ctx context.Context, groupID, fromID int64, msg *mo
 		}
 	}
 
-	// 遍历成员，排除发送者，逐个推送
+	// 并发推送给群成员（排除发送者），限制并发度
+	sem := make(chan struct{}, groupPushConcurrency)
+	var wg sync.WaitGroup
 	for _, memberID := range memberIDs {
 		if memberID == fromID {
 			continue // 跳过发送者自己
 		}
 
-		if err := p.pushToUser(ctx, memberID, fromID, msg); err != nil {
-			p.logger.Error("push to group member failed",
-				zap.Int64("group_id", groupID),
-				zap.Int64("member_id", memberID),
-				zap.String("msg_id", msg.MsgID),
-				zap.Error(err),
-			)
-			// 继续处理其他成员，不因单个失败中断
-		}
+		wg.Add(1)
+		sem <- struct{}{} // 获取信号量
+		go func(mid int64) {
+			defer wg.Done()
+			defer func() { <-sem }() // 释放信号量
+
+			if err := p.pushToUser(ctx, mid, fromID, msg); err != nil {
+				p.logger.Error("push to group member failed",
+					zap.Int64("group_id", groupID),
+					zap.Int64("member_id", mid),
+					zap.String("msg_id", msg.MsgID),
+					zap.Error(err),
+				)
+			}
+		}(memberID)
 	}
+	wg.Wait()
 
 	return nil
 }
