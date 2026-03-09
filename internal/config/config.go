@@ -91,8 +91,11 @@ type JWTConfig struct {
 }
 
 type LogConfig struct {
-	Level    string `mapstructure:"level"`
-	Filename string `mapstructure:"filename"`
+	Level      string `mapstructure:"level"`
+	Filename   string `mapstructure:"filename"`
+	MaxSize    int    `mapstructure:"max_size"`    // 单个日志文件最大大小（MB），默认 100
+	MaxBackups int    `mapstructure:"max_backups"` // 保留旧日志文件数量，默认 5
+	MaxAge     int    `mapstructure:"max_age"`     // 保留旧日志文件天数，默认 30
 }
 
 // GlobalConfig 全局配置实例

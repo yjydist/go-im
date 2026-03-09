@@ -57,3 +57,6 @@ jwt:
 log:
   level: "info"
   filename: "./logs/go-im.log"
+  max_size: 100        # 单个日志文件最大大小（MB）
+  max_backups: 10      # 保留旧日志文件数量（生产环境保留更多）
+  max_age: 30          # 保留旧日志文件天数

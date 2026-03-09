@@ -33,7 +33,7 @@ func main() {
 	}
 
 	// 初始化日志
-	if err := logger.Init(cfg.Log.Level, cfg.Log.Filename); err != nil {
+	if err := logger.Init(cfg.Log.Level, cfg.Log.Filename, cfg.Log.MaxSize, cfg.Log.MaxBackups, cfg.Log.MaxAge); err != nil {
 		log.Fatalf("init logger failed: %v", err)
 	}
 	defer logger.Sync()
