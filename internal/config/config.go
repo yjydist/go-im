@@ -35,6 +35,15 @@ type WSServerConfig struct {
 	RPCAdvertiseAddr string   `mapstructure:"rpc_advertise_addr"` // Docker 等环境中对外通告的 RPC 地址，为空时回退到 localhost:rpc_port
 	InternalAPIKey   string   `mapstructure:"internal_api_key"`
 	AllowedOrigins   []string `mapstructure:"allowed_origins"`
+
+	// Client 连接参数（零值使用默认值）
+	WriteWaitMs       int `mapstructure:"write_wait_ms"`       // 写超时（毫秒），默认 10000
+	PongWaitMs        int `mapstructure:"pong_wait_ms"`        // Pong 超时（毫秒），默认 60000
+	PingPeriodMs      int `mapstructure:"ping_period_ms"`      // Ping 间隔（毫秒），默认 54000
+	MaxMessageSize    int `mapstructure:"max_message_size"`    // 最大消息大小（字节），默认 4096
+	SendChanSize      int `mapstructure:"send_chan_size"`      // 发送通道缓冲，默认 256
+	OnlineTTLSec      int `mapstructure:"online_ttl_sec"`      // 在线状态 TTL（秒），默认 120
+	HeartbeatInterSec int `mapstructure:"heartbeat_inter_sec"` // 心跳刷新间隔（秒），默认 60
 }
 
 type MySQLConfig struct {

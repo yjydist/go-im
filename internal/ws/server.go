@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/segmentio/kafka-go"
@@ -46,6 +47,7 @@ type Server struct {
 	wsRPCAddr      string
 	jwtSecret      string
 	internalAPIKey string
+	clientCfg      ClientConfig
 	logger         *zap.Logger
 }
 
@@ -80,6 +82,18 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 		wsRPCAddr = fmt.Sprintf("localhost:%d", cfg.WSServer.RPCPort)
 	}
 
+	// 构建 ClientConfig（零值使用默认值，由 ClientConfig getter 方法处理）
+	wsCfg := cfg.WSServer
+	clientCfg := ClientConfig{
+		WriteWait:         time.Duration(wsCfg.WriteWaitMs) * time.Millisecond,
+		PongWait:          time.Duration(wsCfg.PongWaitMs) * time.Millisecond,
+		PingPeriod:        time.Duration(wsCfg.PingPeriodMs) * time.Millisecond,
+		MaxMessageSize:    int64(wsCfg.MaxMessageSize),
+		SendChanSize:      wsCfg.SendChanSize,
+		OnlineTTL:         time.Duration(wsCfg.OnlineTTLSec) * time.Second,
+		HeartbeatInterval: time.Duration(wsCfg.HeartbeatInterSec) * time.Second,
+	}
+
 	return &Server{
 		hub:            hub,
 		kafkaWriter:    &kafkaWriterAdapter{writer: writer},
@@ -89,6 +103,7 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 		wsRPCAddr:      wsRPCAddr,
 		jwtSecret:      cfg.JWT.Secret,
 		internalAPIKey: cfg.WSServer.InternalAPIKey,
+		clientCfg:      clientCfg,
 		logger:         logger,
 	}
 }
@@ -131,7 +146,7 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// 创建 Client 并启动
-	client := NewClient(claims.UserID, conn, s.hub, s.kafkaWriter, s.redisRepo, s.groupRepo, s.wsRPCAddr, s.logger)
+	client := NewClient(claims.UserID, conn, s.hub, s.kafkaWriter, s.redisRepo, s.groupRepo, s.wsRPCAddr, s.clientCfg, s.logger)
 	s.hub.Register(client)
 	client.Start()
 }

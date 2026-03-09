@@ -15,21 +15,68 @@ import (
 )
 
 const (
-	// 写入超时时间
-	writeWait = 10 * time.Second
-	// 读取 Pong 超时时间
-	pongWait = 60 * time.Second
-	// Ping 间隔（必须小于 pongWait）
-	pingPeriod = 54 * time.Second
-	// 最大消息大小
-	maxMessageSize = 4096
-	// 发送通道缓冲大小
-	sendChanSize = 256
-	// 在线状态 TTL
-	onlineTTL = 120 * time.Second
-	// 心跳刷新在线状态间隔
-	heartbeatInterval = 60 * time.Second
+	// 默认值（当配置为零值时使用）
+	defaultWriteWait         = 10 * time.Second
+	defaultPongWait          = 60 * time.Second
+	defaultPingPeriod        = 54 * time.Second
+	defaultMaxMessageSize    = 4096
+	defaultSendChanSize      = 256
+	defaultOnlineTTL         = 120 * time.Second
+	defaultHeartbeatInterval = 60 * time.Second
 )
+
+// ClientConfig WS 客户端可配置参数
+type ClientConfig struct {
+	WriteWait         time.Duration
+	PongWait          time.Duration
+	PingPeriod        time.Duration
+	MaxMessageSize    int64
+	SendChanSize      int
+	OnlineTTL         time.Duration
+	HeartbeatInterval time.Duration
+}
+
+func (c ClientConfig) writeWait() time.Duration {
+	if c.WriteWait > 0 {
+		return c.WriteWait
+	}
+	return defaultWriteWait
+}
+
+func (c ClientConfig) pongWait() time.Duration {
+	if c.PongWait > 0 {
+		return c.PongWait
+	}
+	return defaultPongWait
+}
+
+func (c ClientConfig) pingPeriod() time.Duration {
+	if c.PingPeriod > 0 {
+		return c.PingPeriod
+	}
+	return defaultPingPeriod
+}
+
+func (c ClientConfig) maxMessageSize() int64 {
+	if c.MaxMessageSize > 0 {
+		return c.MaxMessageSize
+	}
+	return defaultMaxMessageSize
+}
+
+func (c ClientConfig) onlineTTL() time.Duration {
+	if c.OnlineTTL > 0 {
+		return c.OnlineTTL
+	}
+	return defaultOnlineTTL
+}
+
+func (c ClientConfig) heartbeatInterval() time.Duration {
+	if c.HeartbeatInterval > 0 {
+		return c.HeartbeatInterval
+	}
+	return defaultHeartbeatInterval
+}
 
 // kafkaSendMsg 异步 Kafka 写入任务
 type kafkaSendMsg struct {
@@ -45,6 +92,7 @@ type Client struct {
 	send   chan []byte
 	hub    *Hub
 	logger *zap.Logger
+	cfg    ClientConfig
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -75,19 +123,24 @@ type KafkaMessage struct {
 }
 
 // NewClient 创建客户端连接
-func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWriter, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, wsRPCAddr string, logger *zap.Logger) *Client {
+func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWriter, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, wsRPCAddr string, cfg ClientConfig, logger *zap.Logger) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
+	chanSize := cfg.SendChanSize
+	if chanSize <= 0 {
+		chanSize = defaultSendChanSize
+	}
 	return &Client{
 		UserID:      userID,
 		conn:        conn,
-		send:        make(chan []byte, sendChanSize),
+		send:        make(chan []byte, chanSize),
 		hub:         hub,
 		logger:      logger,
+		cfg:         cfg,
 		ctx:         ctx,
 		cancel:      cancel,
 		closeCh:     make(chan struct{}),
 		kafkaWriter: kafkaWriter,
-		kafkaCh:     make(chan kafkaSendMsg, sendChanSize),
+		kafkaCh:     make(chan kafkaSendMsg, chanSize),
 		redisRepo:   redisRepo,
 		groupRepo:   groupRepo,
 		wsRPCAddr:   wsRPCAddr,
@@ -101,7 +154,7 @@ func (c *Client) Start() {
 	go c.kafkaWorker()
 
 	// 注册在线状态
-	if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
+	if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, c.cfg.onlineTTL()); err != nil {
 		c.logger.Error("set online status failed",
 			zap.Int64("user_id", c.UserID),
 			zap.Error(err),
@@ -148,10 +201,10 @@ func (c *Client) readPump() {
 		}
 	}()
 
-	c.conn.SetReadLimit(maxMessageSize)
-	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetReadLimit(c.cfg.maxMessageSize())
+	_ = c.conn.SetReadDeadline(time.Now().Add(c.cfg.pongWait()))
 	c.conn.SetPongHandler(func(string) error {
-		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return c.conn.SetReadDeadline(time.Now().Add(c.cfg.pongWait()))
 	})
 
 	for {
@@ -172,8 +225,8 @@ func (c *Client) readPump() {
 
 // writePump 从发送通道读取消息发给客户端
 func (c *Client) writePump() {
-	ticker := time.NewTicker(pingPeriod)
-	heartbeat := time.NewTicker(heartbeatInterval)
+	ticker := time.NewTicker(c.cfg.pingPeriod())
+	heartbeat := time.NewTicker(c.cfg.heartbeatInterval())
 	defer func() {
 		ticker.Stop()
 		heartbeat.Stop()
@@ -183,7 +236,7 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.cfg.writeWait()))
 			if !ok {
 				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
@@ -197,14 +250,14 @@ func (c *Client) writePump() {
 			}
 
 		case <-ticker.C:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.cfg.writeWait()))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 
 		case <-heartbeat.C:
 			// 定期刷新在线状态
-			if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
+			if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, c.cfg.onlineTTL()); err != nil {
 				c.logger.Error("refresh online status failed",
 					zap.Int64("user_id", c.UserID),
 					zap.Error(err),
