@@ -40,3 +40,8 @@ deploy/.env
 
 # Build output
 build/
+
+# Go binary output (from go build ./cmd/...)
+/api
+/ws
+/push
