@@ -30,10 +30,11 @@ type APIServerConfig struct {
 }
 
 type WSServerConfig struct {
-	Port           int      `mapstructure:"port"`
-	RPCPort        int      `mapstructure:"rpc_port"`
-	InternalAPIKey string   `mapstructure:"internal_api_key"`
-	AllowedOrigins []string `mapstructure:"allowed_origins"`
+	Port             int      `mapstructure:"port"`
+	RPCPort          int      `mapstructure:"rpc_port"`
+	RPCAdvertiseAddr string   `mapstructure:"rpc_advertise_addr"` // Docker 等环境中对外通告的 RPC 地址，为空时回退到 localhost:rpc_port
+	InternalAPIKey   string   `mapstructure:"internal_api_key"`
+	AllowedOrigins   []string `mapstructure:"allowed_origins"`
 }
 
 type MySQLConfig struct {
