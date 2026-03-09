@@ -4,7 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/yjydist/go-im/internal/config"
 	"github.com/yjydist/go-im/internal/model"
+	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -35,6 +38,79 @@ func setupTestDB(t *testing.T) {
 
 	// 设置包级变量，供 NewXxxRepository() 使用
 	DB = db
+}
+
+// --- InitRedis 测试 ---
+
+func TestInitRedis_Success(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	t.Cleanup(func() { mr.Close() })
+
+	// 需要 GlobalConfig 以防 InitRedis 或被测路径读取（实际 InitRedis 不读 GlobalConfig）
+	cfg := &config.RedisConfig{
+		Addr: mr.Addr(),
+	}
+	l, _ := zap.NewDevelopment()
+	if err := InitRedis(cfg, l); err != nil {
+		t.Fatalf("InitRedis failed: %v", err)
+	}
+	if RDB == nil {
+		t.Fatal("expected RDB to be set after InitRedis, got nil")
+	}
+
+	// 验证连通性
+	ctx := context.Background()
+	if err := RDB.Ping(ctx).Err(); err != nil {
+		t.Fatalf("RDB.Ping failed: %v", err)
+	}
+}
+
+func TestInitRedis_WithPoolConfig(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	t.Cleanup(func() { mr.Close() })
+
+	cfg := &config.RedisConfig{
+		Addr:           mr.Addr(),
+		PoolSize:       50,
+		MinIdleConns:   5,
+		DialTimeoutMs:  2000,
+		ReadTimeoutMs:  1000,
+		WriteTimeoutMs: 1000,
+	}
+	l, _ := zap.NewDevelopment()
+	if err := InitRedis(cfg, l); err != nil {
+		t.Fatalf("InitRedis with pool config failed: %v", err)
+	}
+	if RDB == nil {
+		t.Fatal("expected RDB to be set")
+	}
+
+	// 验证连接池参数生效
+	opts := RDB.Options()
+	if opts.PoolSize != 50 {
+		t.Errorf("expected PoolSize=50, got %d", opts.PoolSize)
+	}
+	if opts.MinIdleConns != 5 {
+		t.Errorf("expected MinIdleConns=5, got %d", opts.MinIdleConns)
+	}
+}
+
+func TestInitRedis_BadAddr(t *testing.T) {
+	cfg := &config.RedisConfig{
+		Addr:          "localhost:1", // 不可连接的地址
+		DialTimeoutMs: 500,           // 缩短超时加快测试
+	}
+	l, _ := zap.NewDevelopment()
+	err := InitRedis(cfg, l)
+	if err == nil {
+		t.Fatal("expected error for unreachable redis addr, got nil")
+	}
 }
 
 // --- UserRepository 测试 ---

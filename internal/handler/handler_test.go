@@ -765,6 +765,86 @@ func TestHandler_GetHistory_InvalidLimit(t *testing.T) {
 	}
 }
 
+// ==================== Additional Friend Handler 测试 ====================
+
+func TestHandler_AcceptFriend_BadRequest(t *testing.T) {
+	setupHandlerTestEnv(t)
+	r := setupRouter()
+
+	_, token := registerAndLogin(t, r, "accbad", "password123", "AccBad")
+
+	// 缺少 friend_id
+	body := jsonBody(t, map[string]string{})
+	_, resp := doRequest(t, r, http.MethodPost, "/api/v1/friend/accept", body, token)
+	if resp.Code != errcode.ErrBadRequest {
+		t.Errorf("expected code=%d (ErrBadRequest), got code=%d", errcode.ErrBadRequest, resp.Code)
+	}
+}
+
+func TestHandler_AcceptFriend_NotFound(t *testing.T) {
+	setupHandlerTestEnv(t)
+	r := setupRouter()
+
+	_, token := registerAndLogin(t, r, "accnotfound", "password123", "AccNotFound")
+
+	// 接受不存在的好友请求
+	body := jsonBody(t, AcceptFriendRequest{FriendID: 99999})
+	_, resp := doRequest(t, r, http.MethodPost, "/api/v1/friend/accept", body, token)
+	if resp.Code != errcode.ErrFriendNotFound {
+		t.Errorf("expected code=%d (ErrFriendNotFound), got code=%d", errcode.ErrFriendNotFound, resp.Code)
+	}
+}
+
+// ==================== Additional User Handler 测试 ====================
+
+func TestHandler_GetUserInfo_NotFound(t *testing.T) {
+	setupHandlerTestEnv(t)
+	r := setupRouter()
+
+	_, token := registerAndLogin(t, r, "infonfound", "password123", "InfoNFound")
+
+	_, resp := doRequest(t, r, http.MethodGet, "/api/v1/user/info?user_id=99999", nil, token)
+	if resp.Code != errcode.ErrUserNotFound {
+		t.Errorf("expected code=%d (ErrUserNotFound), got code=%d", errcode.ErrUserNotFound, resp.Code)
+	}
+}
+
+func TestHandler_GetUserInfo_NegativeID(t *testing.T) {
+	setupHandlerTestEnv(t)
+	r := setupRouter()
+
+	_, token := registerAndLogin(t, r, "negid", "password123", "NegID")
+
+	_, resp := doRequest(t, r, http.MethodGet, "/api/v1/user/info?user_id=-1", nil, token)
+	if resp.Code != errcode.ErrBadRequest {
+		t.Errorf("expected code=%d (ErrBadRequest), got code=%d", errcode.ErrBadRequest, resp.Code)
+	}
+}
+
+func TestHandler_GetHistory_NegativeTargetID(t *testing.T) {
+	setupHandlerTestEnv(t)
+	r := setupRouter()
+
+	_, token := registerAndLogin(t, r, "negtarget", "password123", "NegTarget")
+
+	_, resp := doRequest(t, r, http.MethodGet, "/api/v1/message/history?target_id=-5&chat_type=1", nil, token)
+	if resp.Code != errcode.ErrBadRequest {
+		t.Errorf("expected code=%d (ErrBadRequest), got code=%d", errcode.ErrBadRequest, resp.Code)
+	}
+}
+
+func TestHandler_ListMembers_NegativeGroupID(t *testing.T) {
+	setupHandlerTestEnv(t)
+	r := setupRouter()
+
+	_, token := registerAndLogin(t, r, "neggrp", "password123", "NegGrp")
+
+	_, resp := doRequest(t, r, http.MethodGet, "/api/v1/group/members?group_id=-10", nil, token)
+	if resp.Code != errcode.ErrBadRequest {
+		t.Errorf("expected code=%d (ErrBadRequest), got code=%d", errcode.ErrBadRequest, resp.Code)
+	}
+}
+
 // ==================== parseID 测试 ====================
 
 func TestParseID_Valid(t *testing.T) {
@@ -792,5 +872,19 @@ func TestParseID_NilPointer(t *testing.T) {
 	}
 	if val != 99 {
 		t.Errorf("expected 99, got %d", val)
+	}
+}
+
+func TestParseID_Negative(t *testing.T) {
+	_, err := parseID("-1", nil)
+	if err == nil {
+		t.Fatal("expected error for negative id, got nil")
+	}
+}
+
+func TestParseID_Zero(t *testing.T) {
+	_, err := parseID("0", nil)
+	if err == nil {
+		t.Fatal("expected error for zero id, got nil")
 	}
 }

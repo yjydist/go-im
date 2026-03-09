@@ -268,6 +268,106 @@ func TestFriendService_AcceptAndList(t *testing.T) {
 	}
 }
 
+func TestFriendService_AcceptFriend_NotFound(t *testing.T) {
+	setupTestEnv(t)
+	friendSvc := NewFriendService(testLogger())
+	ctx := context.Background()
+
+	// 接受一个不存在的好友请求
+	err := friendSvc.AcceptFriend(ctx, 1, 99999)
+	if err == nil {
+		t.Fatal("expected error for non-existent friend request, got nil")
+	}
+	code, isBiz := ParseBusinessError(err)
+	if !isBiz || code != 30002 {
+		t.Errorf("expected ErrFriendNotFound (30002), got code=%d isBiz=%v err=%v", code, isBiz, err)
+	}
+}
+
+func TestFriendService_AcceptFriend_AlreadyAccepted(t *testing.T) {
+	setupTestEnv(t)
+	userSvc := NewUserService(testLogger())
+	friendSvc := NewFriendService(testLogger())
+	ctx := context.Background()
+
+	_ = userSvc.Register(ctx, "p", "pw", "P")
+	_ = userSvc.Register(ctx, "q", "pw", "Q")
+
+	userRepo := repository.NewUserRepository()
+	p, _ := userRepo.GetByUsername(ctx, "p")
+	q, _ := userRepo.GetByUsername(ctx, "q")
+
+	// P -> Q 好友请求
+	_ = friendSvc.AddFriend(ctx, p.ID, q.ID)
+	// Q 接受
+	_ = friendSvc.AcceptFriend(ctx, q.ID, p.ID)
+
+	// Q 再次接受（已是好友）
+	err := friendSvc.AcceptFriend(ctx, q.ID, p.ID)
+	if err == nil {
+		t.Fatal("expected error for already accepted friend, got nil")
+	}
+	code, isBiz := ParseBusinessError(err)
+	if !isBiz || code != 30001 {
+		t.Errorf("expected ErrFriendExist (30001), got code=%d isBiz=%v err=%v", code, isBiz, err)
+	}
+}
+
+func TestFriendService_AddFriend_AlreadyFriends(t *testing.T) {
+	setupTestEnv(t)
+	userSvc := NewUserService(testLogger())
+	friendSvc := NewFriendService(testLogger())
+	ctx := context.Background()
+
+	_ = userSvc.Register(ctx, "m", "pw", "M")
+	_ = userSvc.Register(ctx, "n", "pw", "N")
+
+	userRepo := repository.NewUserRepository()
+	m, _ := userRepo.GetByUsername(ctx, "m")
+	n, _ := userRepo.GetByUsername(ctx, "n")
+
+	// M -> N 好友请求，N 接受
+	_ = friendSvc.AddFriend(ctx, m.ID, n.ID)
+	_ = friendSvc.AcceptFriend(ctx, n.ID, m.ID)
+
+	// M 再次添加 N（已是好友）
+	err := friendSvc.AddFriend(ctx, m.ID, n.ID)
+	if err == nil {
+		t.Fatal("expected error for already friends, got nil")
+	}
+	code, isBiz := ParseBusinessError(err)
+	if !isBiz || code != 30001 {
+		t.Errorf("expected ErrFriendExist (30001), got code=%d isBiz=%v err=%v", code, isBiz, err)
+	}
+}
+
+func TestFriendService_AddFriend_Pending(t *testing.T) {
+	setupTestEnv(t)
+	userSvc := NewUserService(testLogger())
+	friendSvc := NewFriendService(testLogger())
+	ctx := context.Background()
+
+	_ = userSvc.Register(ctx, "s", "pw", "S")
+	_ = userSvc.Register(ctx, "r", "pw", "R")
+
+	userRepo := repository.NewUserRepository()
+	s, _ := userRepo.GetByUsername(ctx, "s")
+	r, _ := userRepo.GetByUsername(ctx, "r")
+
+	// S -> R 好友请求
+	_ = friendSvc.AddFriend(ctx, s.ID, r.ID)
+
+	// S 再次添加 R（已有待确认请求）
+	err := friendSvc.AddFriend(ctx, s.ID, r.ID)
+	if err == nil {
+		t.Fatal("expected error for pending friend request, got nil")
+	}
+	code, isBiz := ParseBusinessError(err)
+	if !isBiz || code != 30004 {
+		t.Errorf("expected ErrFriendPending (30004), got code=%d isBiz=%v err=%v", code, isBiz, err)
+	}
+}
+
 // --- GroupService 测试 ---
 
 func TestGroupService_CreateGroup(t *testing.T) {
