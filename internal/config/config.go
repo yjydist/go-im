@@ -12,6 +12,7 @@ type Config struct {
 	App       AppConfig       `mapstructure:"app"`
 	APIServer APIServerConfig `mapstructure:"api_server"`
 	WSServer  WSServerConfig  `mapstructure:"ws_server"`
+	Push      PushConfig      `mapstructure:"push"`
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	Redis     RedisConfig     `mapstructure:"redis"`
 	Kafka     KafkaConfig     `mapstructure:"kafka"`
@@ -69,6 +70,18 @@ type KafkaConfig struct {
 	Brokers       []string `mapstructure:"brokers"`
 	TopicChat     string   `mapstructure:"topic_chat"`
 	ConsumerGroup string   `mapstructure:"consumer_group"`
+
+	// Consumer 参数（零值使用默认值）
+	MaxWaitMs   int   `mapstructure:"max_wait_ms"`  // FetchMessage 最大等待时间（毫秒），默认 3000
+	MaxBytes    int64 `mapstructure:"max_bytes"`    // 单次 Fetch 最大字节数，默认 10485760（10MB）
+	StartOffset int   `mapstructure:"start_offset"` // 新消费组起始偏移：-1=newest(默认), -2=oldest
+}
+
+// PushConfig 推送服务参数
+type PushConfig struct {
+	PushTimeoutMs          int `mapstructure:"push_timeout_ms"`            // 内部 HTTP 推送超时（毫秒），默认 3000
+	GroupMemberCacheTTLSec int `mapstructure:"group_member_cache_ttl_sec"` // 群成员缓存 TTL（秒），默认 3600
+	GroupPushConcurrency   int `mapstructure:"group_push_concurrency"`     // 群推送最大并发度，默认 20
 }
 
 type JWTConfig struct {

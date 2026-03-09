@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/yjydist/go-im/internal/config"
 	"github.com/yjydist/go-im/internal/pkg/logger"
@@ -57,13 +58,21 @@ func main() {
 	redisRepo := repository.NewRedisRepository()
 
 	// 创建 Pusher
-	pusher := push.NewPusher(messageRepo, groupRepo, redisRepo, cfg.WSServer.InternalAPIKey, logger.L)
+	pusherCfg := push.PusherConfig{
+		PushTimeout:          time.Duration(cfg.Push.PushTimeoutMs) * time.Millisecond,
+		GroupMemberCacheTTL:  time.Duration(cfg.Push.GroupMemberCacheTTLSec) * time.Second,
+		GroupPushConcurrency: cfg.Push.GroupPushConcurrency,
+	}
+	pusher := push.NewPusher(messageRepo, groupRepo, redisRepo, cfg.WSServer.InternalAPIKey, pusherCfg, logger.L)
 
 	// 创建 Kafka Consumer
 	consumer := push.NewConsumer(
 		cfg.Kafka.Brokers,
 		cfg.Kafka.TopicChat,
 		cfg.Kafka.ConsumerGroup,
+		time.Duration(cfg.Kafka.MaxWaitMs)*time.Millisecond,
+		cfg.Kafka.MaxBytes,
+		int64(cfg.Kafka.StartOffset),
 		pusher,
 		logger.L,
 	)
