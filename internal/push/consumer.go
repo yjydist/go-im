@@ -14,13 +14,14 @@ import (
 // Consumer Kafka 消费者
 type Consumer struct {
 	reader *kafka.Reader
+	cfg    kafka.ReaderConfig
 	pusher *Pusher
 	logger *zap.Logger
 }
 
-// NewConsumer 创建 Kafka 消费者
+// NewConsumer 创建 Kafka 消费者（Reader 延迟到 Start 中创建，确保 broker 就绪）
 func NewConsumer(brokers []string, topic, groupID string, pusher *Pusher, logger *zap.Logger) *Consumer {
-	reader := kafka.NewReader(kafka.ReaderConfig{
+	cfg := kafka.ReaderConfig{
 		Brokers:     brokers,
 		Topic:       topic,
 		GroupID:     groupID,
@@ -30,10 +31,10 @@ func NewConsumer(brokers []string, topic, groupID string, pusher *Pusher, logger
 		StartOffset: kafka.LastOffset,
 		Logger:      kafka.LoggerFunc(newKafkaLogFunc(logger, zap.DebugLevel)),
 		ErrorLogger: kafka.LoggerFunc(newKafkaLogFunc(logger, zap.ErrorLevel)),
-	})
+	}
 
 	return &Consumer{
-		reader: reader,
+		cfg:    cfg,
 		pusher: pusher,
 		logger: logger,
 	}
@@ -41,6 +42,14 @@ func NewConsumer(brokers []string, topic, groupID string, pusher *Pusher, logger
 
 // Start 启动消费循环
 func (c *Consumer) Start(ctx context.Context) {
+	// 等待 Kafka consumer group coordinator 就绪后再创建 Reader，
+	// 避免 kafka-go 在 coordinator 不可用时永久阻塞在 ReadMessage 内部。
+	c.waitForKafka(ctx)
+	if ctx.Err() != nil {
+		return
+	}
+
+	c.reader = kafka.NewReader(c.cfg)
 	c.logger.Info("kafka consumer started")
 
 	for {
@@ -88,9 +97,61 @@ func (c *Consumer) Start(ctx context.Context) {
 	}
 }
 
+// waitForKafka 等待 Kafka consumer group coordinator 就绪。
+// 通过 kafka.Dial 连接 broker 并尝试获取 topic 分区信息来判断 broker 是否完全初始化。
+// 由于 __consumer_offsets topic 在首次 consumer group 请求时才创建，
+// 这里额外等待一个短暂的初始化窗口以确保 coordinator 就绪。
+func (c *Consumer) waitForKafka(ctx context.Context) {
+	topic := c.cfg.Topic
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		for _, broker := range c.cfg.Brokers {
+			conn, err := kafka.DialContext(ctx, "tcp", broker)
+			if err != nil {
+				continue
+			}
+			// 尝试读取目标 topic 的分区信息，确认 broker 完全初始化
+			partitions, err := conn.ReadPartitions(topic)
+			conn.Close()
+			if err == nil && len(partitions) > 0 {
+				c.logger.Info("kafka broker is ready",
+					zap.String("broker", broker),
+					zap.String("topic", topic),
+					zap.Int("partitions", len(partitions)),
+				)
+				// 额外等待 3 秒让 __consumer_offsets 完成初始化
+				// （首次 consumer group 注册会触发该 topic 创建）
+				c.logger.Info("waiting 3s for consumer group coordinator initialization...")
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(3 * time.Second):
+				}
+				return
+			}
+			if err != nil {
+				c.logger.Debug("kafka topic not ready yet", zap.String("broker", broker), zap.Error(err))
+			}
+		}
+		c.logger.Warn("waiting for kafka topic to become available, retrying in 2s...", zap.String("topic", topic))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // Close 关闭消费者
 func (c *Consumer) Close() error {
-	return c.reader.Close()
+	if c.reader != nil {
+		return c.reader.Close()
+	}
+	return nil
 }
 
 // newKafkaLogFunc 将 zap.Logger 适配为 kafka-go 的 LoggerFunc 签名。
