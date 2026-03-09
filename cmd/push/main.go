@@ -52,7 +52,7 @@ func main() {
 	redisRepo := repository.NewRedisRepository()
 
 	// 创建 Pusher
-	pusher := push.NewPusher(messageRepo, groupRepo, redisRepo, logger.L)
+	pusher := push.NewPusher(messageRepo, groupRepo, redisRepo, cfg.WSServer.InternalAPIKey, logger.L)
 
 	// 创建 Kafka Consumer
 	consumer := push.NewConsumer(

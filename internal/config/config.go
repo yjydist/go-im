@@ -29,8 +29,9 @@ type APIServerConfig struct {
 }
 
 type WSServerConfig struct {
-	Port    int `mapstructure:"port"`
-	RPCPort int `mapstructure:"rpc_port"`
+	Port           int    `mapstructure:"port"`
+	RPCPort        int    `mapstructure:"rpc_port"`
+	InternalAPIKey string `mapstructure:"internal_api_key"`
 }
 
 type MySQLConfig struct {

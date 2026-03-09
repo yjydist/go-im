@@ -83,6 +83,7 @@ services:
       - "9091"
     environment:
       GOIM_JWT_SECRET: ${JWT_SECRET}
+      GOIM_WS_SERVER_INTERNAL_API_KEY: ${INTERNAL_API_KEY}
     depends_on:
       redis:
         condition: service_healthy
@@ -98,6 +99,7 @@ services:
       target: push
     environment:
       GOIM_MYSQL_DSN: "root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/go_im?charset=utf8mb4&parseTime=True&loc=Local"
+      GOIM_WS_SERVER_INTERNAL_API_KEY: ${INTERNAL_API_KEY}
     depends_on:
       mysql:
         condition: service_healthy

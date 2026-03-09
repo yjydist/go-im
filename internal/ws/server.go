@@ -25,12 +25,13 @@ var upgrader = websocket.Upgrader{
 
 // Server WebSocket 网关服务
 type Server struct {
-	hub         *Hub
-	kafkaWriter *kafkaWriterAdapter
-	redisRepo   repository.RedisRepository
-	wsRPCAddr   string
-	jwtSecret   string
-	logger      *zap.Logger
+	hub            *Hub
+	kafkaWriter    *kafkaWriterAdapter
+	redisRepo      repository.RedisRepository
+	wsRPCAddr      string
+	jwtSecret      string
+	internalAPIKey string
+	logger         *zap.Logger
 }
 
 // kafkaWriterAdapter 适配 kafka-go Writer 到 KafkaWriter 接口
@@ -61,12 +62,13 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 	wsRPCAddr := fmt.Sprintf("localhost:%d", cfg.WSServer.RPCPort)
 
 	return &Server{
-		hub:         hub,
-		kafkaWriter: &kafkaWriterAdapter{writer: writer},
-		redisRepo:   redisRepo,
-		wsRPCAddr:   wsRPCAddr,
-		jwtSecret:   cfg.JWT.Secret,
-		logger:      logger,
+		hub:            hub,
+		kafkaWriter:    &kafkaWriterAdapter{writer: writer},
+		redisRepo:      redisRepo,
+		wsRPCAddr:      wsRPCAddr,
+		jwtSecret:      cfg.JWT.Secret,
+		internalAPIKey: cfg.WSServer.InternalAPIKey,
+		logger:         logger,
 	}
 }
 
@@ -116,11 +118,21 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 // HandleInternalPush 处理内部推送请求
 // Push 服务通过此接口将消息推送给在线用户
 // POST /internal/push
+// Header: X-API-Key: <internal_api_key>
 // Body: {"user_id": 123, "data": {...}}
 func (s *Server) HandleInternalPush(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// 验证内部 API Key
+	if s.internalAPIKey != "" {
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey != s.internalAPIKey {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	var msg PushMsg
