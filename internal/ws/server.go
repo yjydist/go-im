@@ -187,7 +187,7 @@ func (s *Server) HandleInternalPush(w http.ResponseWriter, r *http.Request) {
 	)
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	_, _ = w.Write([]byte(`{"code":0,"msg":"ok"}`))
 }
 
 // Close 关闭 Kafka Writer
