@@ -65,8 +65,18 @@ func (r *redisRepository) DelOnline(ctx context.Context, userID int64) error {
 
 func (r *redisRepository) SetMsgDedup(ctx context.Context, msgID string, ttl time.Duration) (bool, error) {
 	key := fmt.Sprintf(keyMsgDedup, msgID)
-	// SETNX：如果 key 不存在则设置成功返回 true，已存在返回 false
-	return r.rdb.SetNX(ctx, key, "1", ttl).Result()
+	// SET key value NX EX ttl：如果 key 不存在则设置成功返回 true，已存在返回 false
+	ok, err := r.rdb.SetArgs(ctx, key, "1", redis.SetArgs{
+		Mode: "NX",
+		TTL:  ttl,
+	}).Result()
+	if err == redis.Nil {
+		return false, nil // key 已存在
+	}
+	if err != nil {
+		return false, err
+	}
+	return ok == "OK", nil
 }
 
 func (r *redisRepository) SetGroupMembers(ctx context.Context, groupID int64, memberIDs []int64, ttl time.Duration) error {
