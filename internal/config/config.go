@@ -75,6 +75,11 @@ type KafkaConfig struct {
 	MaxWaitMs   int   `mapstructure:"max_wait_ms"`  // FetchMessage 最大等待时间（毫秒），默认 3000
 	MaxBytes    int64 `mapstructure:"max_bytes"`    // 单次 Fetch 最大字节数，默认 10485760（10MB）
 	StartOffset int   `mapstructure:"start_offset"` // 新消费组起始偏移：-1=newest(默认), -2=oldest
+
+	// Producer 参数（零值使用默认值）
+	BatchSize      int `mapstructure:"batch_size"`       // 批量发送消息数，默认 100
+	BatchTimeoutMs int `mapstructure:"batch_timeout_ms"` // 批量发送超时（毫秒），默认 1000
+	RequiredAcks   int `mapstructure:"required_acks"`    // 写入确认：0=none, 1=leader(默认), -1=all
 }
 
 // PushConfig 推送服务参数

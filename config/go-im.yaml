@@ -40,6 +40,9 @@ kafka:
   max_wait_ms: 3000          # FetchMessage 最大等待时间
   max_bytes: 10485760        # 单次 Fetch 最大字节数（10MB）
   start_offset: -1           # -1=newest, -2=oldest
+  batch_size: 100            # Producer 批量发送消息数
+  batch_timeout_ms: 1000     # Producer 批量发送超时（毫秒）
+  required_acks: 1           # 写入确认：0=none, 1=leader, -1=all
 
 push:
   push_timeout_ms: 3000             # 内部 HTTP 推送超时

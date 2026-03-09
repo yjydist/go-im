@@ -75,6 +75,16 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 		Topic:    cfg.Kafka.TopicChat,
 		Balancer: &kafka.LeastBytes{},
 	}
+	// 应用 Kafka Producer 配置（零值保持 kafka-go 默认行为）
+	if cfg.Kafka.BatchSize > 0 {
+		writer.BatchSize = cfg.Kafka.BatchSize
+	}
+	if cfg.Kafka.BatchTimeoutMs > 0 {
+		writer.BatchTimeout = time.Duration(cfg.Kafka.BatchTimeoutMs) * time.Millisecond
+	}
+	if cfg.Kafka.RequiredAcks != 0 {
+		writer.RequiredAcks = kafka.RequiredAcks(cfg.Kafka.RequiredAcks)
+	}
 
 	// 优先使用通告地址（Docker 等跨容器场景），为空时回退到 localhost
 	wsRPCAddr := cfg.WSServer.RPCAdvertiseAddr
