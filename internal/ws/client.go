@@ -46,6 +46,8 @@ type Client struct {
 	hub    *Hub
 	logger *zap.Logger
 
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closeCh   chan struct{}
 	closeOnce sync.Once
 
@@ -74,12 +76,15 @@ type KafkaMessage struct {
 
 // NewClient 创建客户端连接
 func NewClient(userID int64, conn *websocket.Conn, hub *Hub, kafkaWriter KafkaWriter, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, wsRPCAddr string, logger *zap.Logger) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		UserID:      userID,
 		conn:        conn,
 		send:        make(chan []byte, sendChanSize),
 		hub:         hub,
 		logger:      logger,
+		ctx:         ctx,
+		cancel:      cancel,
 		closeCh:     make(chan struct{}),
 		kafkaWriter: kafkaWriter,
 		kafkaCh:     make(chan kafkaSendMsg, sendChanSize),
@@ -96,8 +101,7 @@ func (c *Client) Start() {
 	go c.kafkaWorker()
 
 	// 注册在线状态
-	ctx := context.Background()
-	if err := c.redisRepo.SetOnline(ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
+	if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
 		c.logger.Error("set online status failed",
 			zap.Int64("user_id", c.UserID),
 			zap.Error(err),
@@ -108,6 +112,7 @@ func (c *Client) Start() {
 // Close 关闭连接
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
+		c.cancel()
 		close(c.closeCh)
 		_ = c.conn.Close()
 	})
@@ -132,8 +137,10 @@ func (c *Client) readPump() {
 		c.hub.Unregister(c)
 		c.Close()
 		// 清除在线状态（仅当值匹配本连接地址时才删除）
-		ctx := context.Background()
-		if err := c.redisRepo.DelOnline(ctx, c.UserID, c.wsRPCAddr); err != nil {
+		// 使用独立短期 context，因为 c.ctx 可能已取消
+		delCtx, delCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer delCancel()
+		if err := c.redisRepo.DelOnline(delCtx, c.UserID, c.wsRPCAddr); err != nil {
 			c.logger.Error("delete online status failed",
 				zap.Int64("user_id", c.UserID),
 				zap.Error(err),
@@ -197,8 +204,7 @@ func (c *Client) writePump() {
 
 		case <-heartbeat.C:
 			// 定期刷新在线状态
-			ctx := context.Background()
-			if err := c.redisRepo.SetOnline(ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
+			if err := c.redisRepo.SetOnline(c.ctx, c.UserID, c.wsRPCAddr, onlineTTL); err != nil {
 				c.logger.Error("refresh online status failed",
 					zap.Int64("user_id", c.UserID),
 					zap.Error(err),
@@ -263,7 +269,7 @@ func (c *Client) handleChat(data json.RawMessage) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := c.ctx
 
 	// 群聊需要验证发送者是否为群成员
 	if chatData.ChatType == 2 {
@@ -389,8 +395,7 @@ func (c *Client) backfillGroupMembersCache(groupID int64) {
 	if c.groupRepo == nil {
 		return
 	}
-	ctx := context.Background()
-	memberIDs, err := c.groupRepo.ListMemberIDs(ctx, groupID)
+	memberIDs, err := c.groupRepo.ListMemberIDs(c.ctx, groupID)
 	if err != nil {
 		c.logger.Error("backfill group members cache: list member IDs failed",
 			zap.Int64("group_id", groupID),
@@ -401,7 +406,7 @@ func (c *Client) backfillGroupMembersCache(groupID int64) {
 	if len(memberIDs) == 0 {
 		return
 	}
-	if err := c.redisRepo.SetGroupMembers(ctx, groupID, memberIDs, 30*time.Minute); err != nil {
+	if err := c.redisRepo.SetGroupMembers(c.ctx, groupID, memberIDs, 30*time.Minute); err != nil {
 		c.logger.Error("backfill group members cache: set redis failed",
 			zap.Int64("group_id", groupID),
 			zap.Error(err),
@@ -419,7 +424,7 @@ func (c *Client) kafkaWorker() {
 			if !ok {
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 			err := c.kafkaWriter.WriteMessages(ctx, KafkaMessage{
 				Key:   []byte(strconv.FormatInt(c.UserID, 10)),
 				Value: task.msgBytes,
