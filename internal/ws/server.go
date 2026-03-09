@@ -69,12 +69,12 @@ func (a *kafkaWriterAdapter) WriteMessages(ctx context.Context, msgs ...KafkaMes
 
 // NewServer 创建 WS 网关服务
 func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepository, groupRepo repository.GroupRepository, logger *zap.Logger) *Server {
-	// 创建 Kafka Writer
-	writer := kafka.NewWriter(kafka.WriterConfig{
-		Brokers:  cfg.Kafka.Brokers,
+	// 创建 Kafka Writer（使用直接 struct 初始化，避免已废弃的 WriterConfig）
+	writer := &kafka.Writer{
+		Addr:     kafka.TCP(cfg.Kafka.Brokers...),
 		Topic:    cfg.Kafka.TopicChat,
 		Balancer: &kafka.LeastBytes{},
-	})
+	}
 
 	// 优先使用通告地址（Docker 等跨容器场景），为空时回退到 localhost
 	wsRPCAddr := cfg.WSServer.RPCAdvertiseAddr
