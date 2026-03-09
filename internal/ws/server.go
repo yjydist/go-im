@@ -74,7 +74,11 @@ func NewServer(cfg *config.Config, hub *Hub, redisRepo repository.RedisRepositor
 		Balancer: &kafka.LeastBytes{},
 	})
 
-	wsRPCAddr := fmt.Sprintf("localhost:%d", cfg.WSServer.RPCPort)
+	// 优先使用通告地址（Docker 等跨容器场景），为空时回退到 localhost
+	wsRPCAddr := cfg.WSServer.RPCAdvertiseAddr
+	if wsRPCAddr == "" {
+		wsRPCAddr = fmt.Sprintf("localhost:%d", cfg.WSServer.RPCPort)
+	}
 
 	return &Server{
 		hub:            hub,
