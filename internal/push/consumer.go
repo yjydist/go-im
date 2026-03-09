@@ -3,10 +3,12 @@ package push
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/yjydist/go-im/internal/ws"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Consumer Kafka 消费者
@@ -19,11 +21,15 @@ type Consumer struct {
 // NewConsumer 创建 Kafka 消费者
 func NewConsumer(brokers []string, topic, groupID string, pusher *Pusher, logger *zap.Logger) *Consumer {
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  brokers,
-		Topic:    topic,
-		GroupID:  groupID,
-		MinBytes: 1,
-		MaxBytes: 10e6, // 10MB
+		Brokers:     brokers,
+		Topic:       topic,
+		GroupID:     groupID,
+		MinBytes:    1,
+		MaxBytes:    10e6, // 10MB
+		MaxWait:     3 * time.Second,
+		StartOffset: kafka.LastOffset,
+		Logger:      kafka.LoggerFunc(newKafkaLogFunc(logger, zap.DebugLevel)),
+		ErrorLogger: kafka.LoggerFunc(newKafkaLogFunc(logger, zap.ErrorLevel)),
 	})
 
 	return &Consumer{
@@ -85,4 +91,20 @@ func (c *Consumer) Start(ctx context.Context) {
 // Close 关闭消费者
 func (c *Consumer) Close() error {
 	return c.reader.Close()
+}
+
+// newKafkaLogFunc 将 zap.Logger 适配为 kafka-go 的 LoggerFunc 签名。
+// kafka-go 的 Logger/ErrorLogger 使用 Printf 风格: func(string, ...interface{})
+func newKafkaLogFunc(logger *zap.Logger, level zapcore.Level) func(string, ...interface{}) {
+	sugar := logger.WithOptions(zap.AddCallerSkip(2)).Sugar()
+	switch level {
+	case zap.DebugLevel:
+		return sugar.Debugf
+	case zap.ErrorLevel:
+		return sugar.Errorf
+	case zap.WarnLevel:
+		return sugar.Warnf
+	default:
+		return sugar.Infof
+	}
 }
