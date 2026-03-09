@@ -79,6 +79,11 @@ func NewPusher(
 		cfg:            cfg,
 		httpClient: &http.Client{
 			Timeout: cfg.pushTimeout(),
+			Transport: &http.Transport{
+				MaxIdleConns:        100,              // 全局最大空闲连接数
+				MaxIdleConnsPerHost: 20,               // 每个 host 最大空闲连接（Push 主要连接少量 WS 节点）
+				IdleConnTimeout:     90 * time.Second, // 空闲连接超时回收
+			},
 		},
 		logger: logger,
 	}
