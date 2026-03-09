@@ -90,8 +90,11 @@ func main() {
 	// 启动服务（支持 Graceful Shutdown）
 	addr := fmt.Sprintf(":%d", cfg.APIServer.Port)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
+		Addr:         addr,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	// 监听系统信号
