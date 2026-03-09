@@ -26,6 +26,11 @@ func main() {
 		log.Fatalf("load config failed: %v", err)
 	}
 
+	// 校验配置安全性
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config validation failed: %v", err)
+	}
+
 	// 初始化日志
 	if err := logger.Init(cfg.Log.Level, cfg.Log.Filename); err != nil {
 		log.Fatalf("init logger failed: %v", err)

@@ -93,3 +93,27 @@ func Load(configPath string) (*Config, error) {
 	GlobalConfig = cfg
 	return cfg, nil
 }
+
+// Validate 校验配置安全性。
+// 在 release 环境下强制要求安全配置，在 debug 环境下仅发出警告日志（返回 nil）。
+// 调用方应在 Load 之后、启动服务之前调用此方法。
+func (c *Config) Validate() error {
+	isRelease := c.App.Env == "release"
+
+	// JWT Secret 校验：禁止使用空值或默认占位符
+	if c.JWT.Secret == "" || c.JWT.Secret == "changeme" {
+		if isRelease {
+			return fmt.Errorf("config: jwt.secret must be set to a strong value in release mode (got %q)", c.JWT.Secret)
+		}
+		// debug 模式：不阻止启动，由调用方决定是否打印警告
+	}
+
+	// Internal API Key 校验：release 模式下禁止为空（空值会导致内部推送接口无认证）
+	if c.WSServer.InternalAPIKey == "" {
+		if isRelease {
+			return fmt.Errorf("config: ws_server.internal_api_key must be set in release mode to protect internal push endpoint")
+		}
+	}
+
+	return nil
+}
