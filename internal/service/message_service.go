@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/yjydist/go-im/internal/model"
+	"github.com/yjydist/go-im/internal/pkg/errcode"
 	"github.com/yjydist/go-im/internal/repository"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // MessageService 消息服务接口
@@ -15,15 +19,17 @@ type MessageService interface {
 }
 
 type messageService struct {
-	msgRepo repository.MessageRepository
-	logger  *zap.Logger
+	msgRepo   repository.MessageRepository
+	groupRepo repository.GroupRepository
+	logger    *zap.Logger
 }
 
 // NewMessageService 创建消息服务
 func NewMessageService(logger *zap.Logger) MessageService {
 	return &messageService{
-		msgRepo: repository.NewMessageRepository(),
-		logger:  logger,
+		msgRepo:   repository.NewMessageRepository(),
+		groupRepo: repository.NewGroupRepository(),
+		logger:    logger,
 	}
 }
 
@@ -56,5 +62,17 @@ func (s *messageService) GetHistory(ctx context.Context, userID, targetID int64,
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+
+	// 群聊需要验证请求者是否为群成员，防止非成员拉取群历史消息
+	if chatType == 2 {
+		_, err := s.groupRepo.GetMember(ctx, targetID, userID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("%w: %d", ErrBusiness, errcode.ErrGroupNotMember)
+			}
+			return nil, fmt.Errorf("check group membership failed: %w", err)
+		}
+	}
+
 	return s.msgRepo.GetHistory(ctx, userID, targetID, chatType, cursorMsgID, limit)
 }

@@ -102,6 +102,10 @@ func (h *MessageHandler) GetHistory(c *gin.Context) {
 
 	messages, err := h.msgService.GetHistory(c.Request.Context(), userID, targetID, int8(chatType), cursorMsgID, limit)
 	if err != nil {
+		if code, ok := service.ParseBusinessError(err); ok {
+			response.Error(c, code)
+			return
+		}
 		h.logger.Error("get history failed", zap.Error(err))
 		response.Error(c, errcode.ErrInternal)
 		return
