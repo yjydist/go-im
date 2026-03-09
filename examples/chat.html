@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>go-im WebSocket Chat Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+  h1 { font-size: 1.4em; margin-bottom: 16px; color: #333; }
+  .container { max-width: 800px; margin: 0 auto; }
+
+  /* 连接配置区 */
+  .config-panel { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .config-panel h2 { font-size: 1em; margin-bottom: 12px; color: #555; }
+  .config-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+  .config-row label { min-width: 80px; font-size: 0.85em; color: #666; }
+  .config-row input { flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em; min-width: 200px; }
+  .config-row button { padding: 6px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+
+  /* 第一步: 登录 */
+  .step-panel { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .step-panel h2 { font-size: 1em; margin-bottom: 12px; color: #555; }
+  #btnLogin { background: #4CAF50; color: #fff; }
+  #btnLogin:hover { background: #45a049; }
+
+  /* 第二步: WS 连接 */
+  #btnConnect { background: #2196F3; color: #fff; }
+  #btnConnect:hover { background: #1976D2; }
+  #btnDisconnect { background: #f44336; color: #fff; }
+  #btnDisconnect:hover { background: #d32f2f; }
+  .status { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 8px; }
+  .status-disconnected { background: #ffcdd2; color: #c62828; }
+  .status-connected { background: #c8e6c9; color: #2e7d32; }
+  .status-connecting { background: #fff9c4; color: #f57f17; }
+
+  /* 第三步: 发送消息 */
+  .send-panel { display: flex; gap: 8px; margin-top: 8px; }
+  .send-panel input { flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em; }
+  .send-panel button { padding: 6px 16px; background: #FF9800; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }
+  .send-panel button:hover { background: #F57C00; }
+
+  /* 日志区 */
+  .log-panel { background: #263238; border-radius: 8px; padding: 16px; color: #eee; font-family: 'Menlo', 'Monaco', 'Courier New', monospace; font-size: 0.82em; max-height: 400px; overflow-y: auto; }
+  .log-panel .log-entry { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.05); word-break: break-all; }
+  .log-entry.sent { color: #81d4fa; }
+  .log-entry.recv { color: #a5d6a7; }
+  .log-entry.error { color: #ef9a9a; }
+  .log-entry.info { color: #fff59d; }
+  .log-entry .ts { color: #78909c; margin-right: 8px; }
+
+  .clear-btn { margin-top: 8px; padding: 4px 12px; background: #546e7a; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>🚀 go-im WebSocket Chat Demo</h1>
+
+  <!-- Step 1: Login to get JWT -->
+  <div class="step-panel">
+    <h2>Step 1 — Login (get JWT token)</h2>
+    <div class="config-row">
+      <label>API URL:</label>
+      <input type="text" id="apiUrl" value="http://localhost:8080" placeholder="http://localhost:8080">
+    </div>
+    <div class="config-row">
+      <label>Username:</label>
+      <input type="text" id="username" value="" placeholder="your username">
+    </div>
+    <div class="config-row">
+      <label>Password:</label>
+      <input type="password" id="password" value="" placeholder="your password">
+    </div>
+    <div class="config-row">
+      <label></label>
+      <button id="btnLogin" onclick="doLogin()">Login</button>
+      <span id="loginStatus" style="font-size:0.85em;color:#666;margin-left:8px;"></span>
+    </div>
+    <div class="config-row">
+      <label>Token:</label>
+      <input type="text" id="token" value="" placeholder="JWT token (auto-filled after login, or paste manually)">
+    </div>
+  </div>
+
+  <!-- Step 2: Connect WebSocket -->
+  <div class="step-panel">
+    <h2>Step 2 — WebSocket Connection
+      <span id="wsStatus" class="status status-disconnected">Disconnected</span>
+    </h2>
+    <div class="config-row">
+      <label>WS URL:</label>
+      <input type="text" id="wsUrl" value="ws://localhost:8081" placeholder="ws://localhost:8081">
+    </div>
+    <div class="config-row">
+      <label></label>
+      <button id="btnConnect" onclick="doConnect()">Connect</button>
+      <button id="btnDisconnect" onclick="doDisconnect()" style="display:none;">Disconnect</button>
+    </div>
+  </div>
+
+  <!-- Step 3: Send Message -->
+  <div class="step-panel">
+    <h2>Step 3 — Send Chat Message</h2>
+    <div class="config-row">
+      <label>To User ID:</label>
+      <input type="number" id="toUserId" value="" placeholder="recipient user_id (int64)">
+    </div>
+    <div class="config-row">
+      <label>Chat Type:</label>
+      <input type="number" id="chatType" value="1" placeholder="1=private, 2=group">
+    </div>
+    <div class="send-panel">
+      <input type="text" id="msgContent" placeholder="Type your message..." onkeydown="if(event.key==='Enter')doSend()">
+      <button onclick="doSend()">Send</button>
+    </div>
+  </div>
+
+  <!-- Log Panel -->
+  <div style="margin-top:16px;">
+    <h2 style="font-size:1em;color:#555;margin-bottom:8px;">Message Log</h2>
+    <div class="log-panel" id="logPanel"></div>
+    <button class="clear-btn" onclick="clearLog()">Clear Log</button>
+  </div>
+</div>
+
+<script>
+let ws = null;
+let msgSeq = 0;
+
+function ts() {
+  return new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function log(text, cls) {
+  const panel = document.getElementById('logPanel');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + (cls || '');
+  entry.innerHTML = '<span class="ts">[' + ts() + ']</span>' + escapeHtml(text);
+  panel.appendChild(entry);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function clearLog() {
+  document.getElementById('logPanel').innerHTML = '';
+}
+
+function setWsStatus(status) {
+  const el = document.getElementById('wsStatus');
+  el.textContent = status;
+  el.className = 'status status-' + status.toLowerCase();
+  document.getElementById('btnConnect').style.display = (status === 'Connected') ? 'none' : '';
+  document.getElementById('btnDisconnect').style.display = (status === 'Connected') ? '' : 'none';
+}
+
+// Step 1: Login via API
+async function doLogin() {
+  const apiUrl = document.getElementById('apiUrl').value.replace(/\/+$/, '');
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+  const statusEl = document.getElementById('loginStatus');
+
+  if (!username || !password) {
+    statusEl.textContent = '⚠ Please enter username and password';
+    statusEl.style.color = '#f44336';
+    return;
+  }
+
+  statusEl.textContent = 'Logging in...';
+  statusEl.style.color = '#666';
+
+  try {
+    const resp = await fetch(apiUrl + '/api/v1/user/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    });
+    const data = await resp.json();
+
+    if (data.code === 0 && data.data && data.data.token) {
+      document.getElementById('token').value = data.data.token;
+      statusEl.textContent = '✓ Login success (user_id: ' + data.data.user_id + ')';
+      statusEl.style.color = '#4CAF50';
+      log('Login success — user_id: ' + data.data.user_id, 'info');
+    } else {
+      statusEl.textContent = '✗ ' + (data.msg || 'Login failed');
+      statusEl.style.color = '#f44336';
+      log('Login failed: ' + JSON.stringify(data), 'error');
+    }
+  } catch (e) {
+    statusEl.textContent = '✗ Network error: ' + e.message;
+    statusEl.style.color = '#f44336';
+    log('Login error: ' + e.message, 'error');
+  }
+}
+
+// Step 2: Connect WebSocket
+function doConnect() {
+  const wsUrl = document.getElementById('wsUrl').value.replace(/\/+$/, '');
+  const token = document.getElementById('token').value;
+
+  if (!token) {
+    log('Please login first or paste a JWT token', 'error');
+    return;
+  }
+
+  const url = wsUrl + '/ws?token=' + encodeURIComponent(token);
+  log('Connecting to ' + wsUrl + '/ws ...', 'info');
+  setWsStatus('Connecting');
+
+  ws = new WebSocket(url);
+
+  ws.onopen = function() {
+    log('WebSocket connected!', 'info');
+    setWsStatus('Connected');
+  };
+
+  ws.onmessage = function(event) {
+    log('← RECV: ' + event.data, 'recv');
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'ack') {
+        log('  ✓ Server ACK for msg_id: ' + (msg.data && msg.data.msg_id), 'info');
+      } else if (msg.type === 'chat') {
+        log('  💬 New message from ' + JSON.stringify(msg.data), 'info');
+      } else if (msg.type === 'error') {
+        log('  ⚠ Server error: ' + JSON.stringify(msg.data), 'error');
+      }
+    } catch (e) {
+      // non-JSON message, already logged raw
+    }
+  };
+
+  ws.onclose = function(event) {
+    log('WebSocket closed (code=' + event.code + ', reason=' + (event.reason || 'none') + ')', 'info');
+    setWsStatus('Disconnected');
+    ws = null;
+  };
+
+  ws.onerror = function(event) {
+    log('WebSocket error', 'error');
+  };
+}
+
+function doDisconnect() {
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  setWsStatus('Disconnected');
+  log('Disconnected by user', 'info');
+}
+
+// Step 3: Send chat message
+function doSend() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    log('Not connected. Please connect first.', 'error');
+    return;
+  }
+
+  const toId = parseInt(document.getElementById('toUserId').value);
+  const chatType = parseInt(document.getElementById('chatType').value) || 1;
+  const content = document.getElementById('msgContent').value.trim();
+
+  if (!toId) {
+    log('Please enter a recipient user ID', 'error');
+    return;
+  }
+  if (!content) {
+    log('Please type a message', 'error');
+    return;
+  }
+
+  msgSeq++;
+  const msgId = 'web-' + Date.now() + '-' + msgSeq;
+
+  const msg = {
+    type: 'chat',
+    data: {
+      msg_id: msgId,
+      to_id: toId,
+      chat_type: chatType,
+      content_type: 1,
+      content: content
+    }
+  };
+
+  const payload = JSON.stringify(msg);
+  ws.send(payload);
+  log('→ SENT: ' + payload, 'sent');
+
+  document.getElementById('msgContent').value = '';
+}
+</script>
+
+</body>
+</html>
