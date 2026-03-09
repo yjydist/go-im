@@ -66,7 +66,7 @@ func main() {
 	// 创建 Gin Engine
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(middleware.CORS())
+	r.Use(middleware.CORS(cfg.APIServer.AllowedOrigins...))
 	r.Use(middleware.Logger(logger.L))
 
 	// 注册路由

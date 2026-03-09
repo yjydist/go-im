@@ -4,6 +4,8 @@ app:
 
 api_server:
   port: 8080
+  # 生产环境应配置具体域名
+  allowed_origins: []
 
 ws_server:
   port: 8081

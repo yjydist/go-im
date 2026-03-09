@@ -25,7 +25,8 @@ type AppConfig struct {
 }
 
 type APIServerConfig struct {
-	Port int `mapstructure:"port"`
+	Port           int      `mapstructure:"port"`
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
 }
 
 type WSServerConfig struct {
