@@ -258,6 +258,10 @@ func (c *Client) handleChat(data json.RawMessage) {
 		c.sendError(400, "content is required")
 		return
 	}
+	if len(chatData.Content) > 2000 {
+		c.sendError(400, "content too long, max 2000 characters")
+		return
+	}
 
 	ctx := context.Background()
 
@@ -407,6 +411,8 @@ func (c *Client) backfillGroupMembersCache(groupID int64) {
 
 // kafkaWorker 异步消费 kafkaCh 并写入 Kafka，避免阻塞 readPump
 func (c *Client) kafkaWorker() {
+	defer c.drainKafkaCh()
+
 	for {
 		select {
 		case task, ok := <-c.kafkaCh:
@@ -444,6 +450,30 @@ func (c *Client) kafkaWorker() {
 			)
 
 		case <-c.closeCh:
+			return
+		}
+	}
+}
+
+// drainKafkaCh 在 kafkaWorker 退出前排空 kafkaCh，回滚残留消息的 dedup key
+func (c *Client) drainKafkaCh() {
+	for {
+		select {
+		case task, ok := <-c.kafkaCh:
+			if !ok {
+				return
+			}
+			c.logger.Warn("draining kafkaCh: rolling back dedup key for unsent message",
+				zap.String("msg_id", task.chatData.MsgID),
+				zap.Int64("user_id", c.UserID),
+			)
+			if delErr := c.redisRepo.DelMsgDedup(context.Background(), task.chatData.MsgID); delErr != nil {
+				c.logger.Error("drain: rollback dedup key failed",
+					zap.String("msg_id", task.chatData.MsgID),
+					zap.Error(delErr),
+				)
+			}
+		default:
 			return
 		}
 	}

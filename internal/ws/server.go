@@ -162,6 +162,8 @@ func (s *Server) HandleInternalPush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var msg PushMsg
+	// 限制请求体大小，防止恶意超大 body 导致 OOM（最大 1MB）
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return

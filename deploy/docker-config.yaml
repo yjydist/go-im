@@ -34,8 +34,8 @@ kafka:
   consumer_group: "im_push_group"
 
 jwt:
-  # 通过环境变量 GOIM_JWT_SECRET 覆盖
-  secret: "changeme"
+  # 必须通过环境变量 GOIM_JWT_SECRET 设置，否则服务启动时校验将拒绝启动
+  secret: ""
   access_expire_hours: 24
   refresh_expire_hours: 168
 
